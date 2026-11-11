@@ -29,7 +29,7 @@ CONFIG = {
     "eva_date": "2026-10-26",
     "eva_date_source": "user_confirmed",
 }
-ROSTER = [{"id": "student-1", "text": "Adams, Ann student-1"}]
+ROSTER = [{"id": "1000001", "text": "Adams, Ann 1000001"}]
 
 
 @pytest.fixture
@@ -62,7 +62,7 @@ def _context():
 
 def test_unknown_manually_recorded_attendance_cannot_be_called_missing_eva(ledger):
     """A positive SIS total of unknown dates is not proof of missing census activity."""
-    mc = _mc(ledger, {"student-1": 1})
+    mc = _mc(ledger, {"1000001": 1})
 
     flags = mc._check_eva_attendance(_context(), ledger, TERM, SECTION, today=TODAY)
 
@@ -74,9 +74,9 @@ def test_unknown_manually_recorded_attendance_cannot_be_called_missing_eva(ledge
 @freeze_time("2026-10-27 16:00:00")
 def test_count_mismatch_prevents_verified_eva_status_after_successful_scan(ledger):
     """A complete BrightSpace scan cannot overrule a failed SIS reconciliation."""
-    ledger.record_eva_expected(TERM, SECTION, "student-1", CUTOFF, "eva-1")
-    ledger.set_status(TERM, SECTION, "student-1", CUTOFF, STATUS_VERIFIED)
-    mc = _mc(ledger, {"student-1": 0})
+    ledger.record_eva_expected(TERM, SECTION, "1000001", CUTOFF, "eva-1")
+    ledger.set_status(TERM, SECTION, "1000001", CUTOFF, STATUS_VERIFIED)
+    mc = _mc(ledger, {"1000001": 0})
     context = _context()
     mc.current_tab = "sis"
     mc._open_course_context = MagicMock(return_value=context)
@@ -114,15 +114,15 @@ def test_count_mismatch_prevents_verified_eva_status_after_successful_scan(ledge
 
 def test_complete_empty_scan_invalidates_migrated_legacy_eva_evidence(ledger):
     """Upgrading must not strand old raw IDs outside fresh snapshot reconciliation."""
-    ledger.record_eva_expected(TERM, SECTION, "student-1", CUTOFF, "eva-1")
-    ledger.set_status(TERM, SECTION, "student-1", CUTOFF, STATUS_VERIFIED)
+    ledger.record_eva_expected(TERM, SECTION, "1000001", CUTOFF, "eva-1")
+    ledger.set_status(TERM, SECTION, "1000001", CUTOFF, STATUS_VERIFIED)
 
     ledger.migrate_eva_evidence(CONFIG)
     ledger.reconcile_eva_expected_batch(TERM, SECTION, [], ledger.eva_source_id(CONFIG))
 
-    assert ledger.get_status(TERM, SECTION, "student-1", CUTOFF) == "review_required"
+    assert ledger.get_status(TERM, SECTION, "1000001", CUTOFF) == "review_required"
     assert ledger.qualifying_attendance_by_student(TERM, SECTION, CUTOFF) == {}
-    assert ledger.eva_reconciliation(TERM, SECTION)[0]["student_id"] == "student-1"
+    assert ledger.eva_reconciliation(TERM, SECTION)[0]["student_id"] == "1000001"
 
 
 def test_census_check_revalidates_dates_even_when_total_attendance_count_is_unchanged(
@@ -130,11 +130,11 @@ def test_census_check_revalidates_dates_even_when_total_attendance_count_is_unch
 ):
     """A later Present mark can replace census attendance without changing totals."""
     source_id = ledger.eva_source_id(CONFIG)
-    ledger.record_eva_expected(TERM, SECTION, "student-1", CUTOFF, source_id)
-    ledger.set_status(TERM, SECTION, "student-1", CUTOFF, STATUS_VERIFIED)
-    mc = _mc(ledger, {"student-1": 1})
+    ledger.record_eva_expected(TERM, SECTION, "1000001", CUTOFF, source_id)
+    ledger.set_status(TERM, SECTION, "1000001", CUTOFF, STATUS_VERIFIED)
+    mc = _mc(ledger, {"1000001": 1})
     current = [None]
-    saved = {(TODAY, "student-1")}
+    saved = {(TODAY, "1000001")}
 
     def select(day, datepicker_avail):
         current[0] = day
@@ -157,7 +157,7 @@ def test_census_check_revalidates_dates_even_when_total_attendance_count_is_unch
     assert [
         (row.student_id, row.attend_date) for row in ledger.outstanding(TERM, SECTION)
     ] == [
-        ("student-1", CUTOFF),
+        ("1000001", CUTOFF),
     ]
 
 
@@ -165,9 +165,9 @@ def test_census_check_revalidates_dates_even_when_total_attendance_count_is_unch
 def test_unreadable_census_date_cannot_advance_course_completion_checkpoint(ledger):
     """Late historical-verification failures must leave the tracker unfinished."""
     source_id = ledger.eva_source_id(CONFIG)
-    ledger.record_eva_expected(TERM, SECTION, "student-1", CUTOFF, source_id)
-    ledger.set_status(TERM, SECTION, "student-1", CUTOFF, STATUS_VERIFIED)
-    mc = _mc(ledger, {"student-1": 1})
+    ledger.record_eva_expected(TERM, SECTION, "1000001", CUTOFF, source_id)
+    ledger.set_status(TERM, SECTION, "1000001", CUTOFF, STATUS_VERIFIED)
+    mc = _mc(ledger, {"1000001": 1})
     context = _context()
     mc.current_tab = "sis"
     mc._open_course_context = MagicMock(return_value=context)
@@ -183,9 +183,9 @@ def test_unreadable_census_date_cannot_advance_course_completion_checkpoint(ledg
         attendance_records={},
         eva_activity=CONFIG,
         eva_activity_id="eva-1",
-        eva_attendance_records={"10-26-2026": ["Ann Adams"]},
+        eva_attendance_records={"10-26-2026": ["1000001"]},
         eva_collection_result=EVACompletionResult(
-            "complete", {"10-26-2026": ["Ann Adams"]}
+            "complete", {"10-26-2026": ["1000001"]}
         ),
         scrape_problems=[],
     )
@@ -210,7 +210,7 @@ def test_unreadable_census_date_cannot_advance_course_completion_checkpoint(ledg
 @freeze_time("2026-10-27 16:00:00")
 def test_census_check_exception_supersedes_previous_verified_results(ledger):
     ledger.record_eva_check(TERM, SECTION, [])
-    mc = _mc(ledger, {"student-1": 0})
+    mc = _mc(ledger, {"1000001": 0})
     context = _context()
     mc.current_tab = "sis"
     mc._open_course_context = MagicMock(return_value=context)

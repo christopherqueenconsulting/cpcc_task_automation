@@ -36,6 +36,8 @@ from cqc_cpcc.utilities.date import (
 )
 from cqc_cpcc.utilities.env_constants import BRIGHTSPACE_URL
 from cqc_cpcc.utilities.logger import logger
+from cqc_cpcc.student_identity import (ORG_ID_RE, ActivityRow, Classlist, build_classlist,
+                                        user_id_from_actor_href, user_id_from_onclick)
 from cqc_cpcc.utilities.pii_redaction import alias, register_student, register_students
 from cqc_cpcc.utilities.selenium_util import (
     click_element_wait_retry,
@@ -49,7 +51,7 @@ from cqc_cpcc.utilities.selenium_util import (
 from cqc_cpcc.utilities.utils import (
     LINE_DASH_COUNT,
     first_two_uppercase,
-    get_unique_names_flip_first_last,
+    get_unique_names,
     login_if_needed,
 )
 from cqc_cpcc.withdrawals import UNKNOWN_ACTIVITY_WEEK, classify_withdrawal
@@ -159,6 +161,8 @@ class BrightSpace_Course:
                 convert_date_to_datetime(date_range_start).date() + DT.timedelta(days=1),
             )
         self.attendance_records = {}
+        # Session-only identity table (names and ids); read once per run, dropped when collection ends.
+        self.classlist: Classlist | None = None
         # Anything that means this scrape may have missed activity (a list of due
         # items whose links could not be read, a table that would not line up).
         # A non-empty list keeps the course's ledger run "incomplete", so the next
@@ -171,24 +175,31 @@ class BrightSpace_Course:
         if self.open_course_tab():
 
             if collect_attendance:
-                self.get_attendance_from_assignments()
-                self.get_attendance_from_quizzes()
+                self.classlist = self._read_classlist()
+                try:
+                    self.get_attendance_from_assignments()
+                    self.get_attendance_from_quizzes()
 
-                if eva_activity:
-                    try:
-                        self.eva_collection_result = self.get_eva_activity_completions(eva_activity)
-                    except Exception as error:  # EVA failures are isolated from ordinary attendance.
-                        if not self._browser_session_healthy():
-                            raise
-                        self.eva_collection_result = EVACompletionResult(
-                            status="incomplete", error_code=type(error).__name__,
-                        )
-                        logger.warning(
-                            "EVA completion collection failed for %s (%s); ordinary attendance continues.",
-                            self.get_course_and_section(), type(error).__name__,
-                        )
-                    if self.eva_collection_result.complete:
-                        self.eva_attendance_records = self.eva_collection_result.records
+                    if eva_activity:
+                        try:
+                            self.eva_collection_result = self.get_eva_activity_completions(eva_activity)
+                        except Exception as error:  # EVA failures are isolated from ordinary attendance.
+                            if not self._browser_session_healthy():
+                                raise
+                            self.eva_collection_result = EVACompletionResult(
+                                status="incomplete", error_code=type(error).__name__,
+                            )
+                            logger.warning(
+                                "EVA completion collection failed for %s (%s); ordinary attendance continues.",
+                                self.get_course_and_section(), type(error).__name__,
+                            )
+                        if self.eva_collection_result.complete:
+                            self.eva_attendance_records = self.eva_collection_result.records
+                finally:
+                    # Records now hold Org Defined IDs only: drop the name/id table (and the log redactor's copy)
+                    # whether or not collection finished.
+                    if self.classlist is not None:
+                        self.classlist.clear()
 
             if discover_eva_activities:
                 self.eva_activity_candidates = self.discover_eva_activities()
@@ -252,11 +263,11 @@ class BrightSpace_Course:
         # Sort the records first
         self.attendance_records = dict(sorted(self.attendance_records.items()))
         # norm_records = dict(map(lambda kv: (kv[0], get_unique_names(kv[1])), attendance_records.items()))
+        # The records hold Org Defined IDs (see student_identity), not names: de-duplicate and sort only.
         self.attendance_records = dict(
-            map(lambda kv: (kv[0], get_unique_names_flip_first_last(kv[1])), self.attendance_records.items()))
+            map(lambda kv: (kv[0], get_unique_names(kv[1])), self.attendance_records.items()))
         self.eva_attendance_records = dict(
-            map(lambda kv: (kv[0], get_unique_names_flip_first_last(kv[1])),
-                self.eva_attendance_records.items()))
+            map(lambda kv: (kv[0], get_unique_names(kv[1])), self.eva_attendance_records.items()))
 
     def close_course_tab(self):
         """Close the BrightSpace tab and restore the tab that was active before it."""
@@ -926,6 +937,30 @@ class BrightSpace_Course:
         return (len(row.find_elements(By.XPATH, "./th")) > 1
                 and len(row.find_elements(By.XPATH, "./td")) <= 1)
 
+    @staticmethod
+    def _row_user_id(row) -> str | None:
+        """The BrightSpace user id in a results row's own links (learner link or quiz attempt link), else None.
+
+        Exactly one id must be found, and every id-bearing link (a ``feedback,`` handler or an ``/actor/``
+        href) must yield it: two different ids, or an id-bearing link that does not decode, mean the row
+        cannot be trusted and it is left without a user id (so it is never recorded).
+        """
+        links = row.find_elements(By.XPATH, ".//a")
+        if not isinstance(links, (list, tuple)):
+            return None
+        found, unreadable = set(), False
+        for link in links:
+            get_attribute = getattr(link, "get_attribute", None)
+            if not callable(get_attribute):
+                continue
+            onclick, href = get_attribute("onclick"), get_attribute("href")
+            uid = user_id_from_onclick(onclick) or user_id_from_actor_href(href)
+            if uid:
+                found.add(uid)
+            elif (isinstance(onclick, str) and "feedback," in onclick) or (isinstance(href, str) and "/actor/" in href):
+                unreadable = True
+        return found.pop() if len(found) == 1 and not unreadable else None
+
     def _snapshot_activity_page(self, table_xpath: str, name_cell: int,
                                 date_cell: int, pages_read: int,
                                 rows_read: int) -> tuple[tuple[str, str], ...]:
@@ -1000,6 +1035,7 @@ class BrightSpace_Course:
                 # (a checkbox td, the learner name in its th) and, right after it, a date row
                 # (3 tds: empty, date, delete).
                 pending_name: str | None = None
+                pending_user: str | None = None
                 for row in rows:
                     cells = row.find_elements(By.XPATH, "./td")
                     if not cells:  # Header rows use th and carry no completion data.
@@ -1018,10 +1054,10 @@ class BrightSpace_Course:
                     if len(cells) == 1 and ((isinstance(colspan, str) and colspan) or
                                             (isinstance(row_class, str) and "pager" in row_class.casefold())
                                             or is_pager_summary):
-                        pending_name = None  # a group or pager row ends the learner above it
+                        pending_name = pending_user = None  # a group or pager row ends the learner above it
                         continue
                     if is_pager_summary:
-                        pending_name = None
+                        pending_name = pending_user = None
                         continue
                     name_col, date_col = header_indexes or (name_cell - 1, date_cell - 1)
                     if len(cells) <= max(name_col, date_col):
@@ -1034,6 +1070,7 @@ class BrightSpace_Course:
                         if th_name:
                             completion_rows += 1
                             pending_name = th_name
+                            pending_user = self._row_user_id(row)
                             continue
                         raise _EVAReadIncomplete("completion_row_malformed", pages_read, rows_read)
                     if header_indexes and "first name" in headers and "last name" in headers:
@@ -1052,13 +1089,17 @@ class BrightSpace_Course:
                         # files or resubmissions has several date rows in a row (read live 2026-11-10),
                         # so the name stays until the next learner row.
                         name = pending_name
+                        user_id = pending_user
+                    else:
+                        user_id = self._row_user_id(row)
                     if not name:
                         raise _EVAReadIncomplete("completion_row_missing_student", pages_read, rows_read)
                     completion_rows += 1
                     pending_name = name if two_row_layout else None
+                    pending_user = user_id if two_row_layout else None
                     # Blank dates represent rows without a submitted/completed event.
                     if completion_text:
-                        page.append((name, completion_text))
+                        page.append(ActivityRow(name, completion_text, user_id))
                 if not completion_rows:
                     raise _EVAReadIncomplete("results_empty_state_unconfirmed", pages_read, rows_read)
                 return tuple(page)
@@ -1192,6 +1233,120 @@ class BrightSpace_Course:
                 return rows_out, len(pages)
         raise _EVAReadIncomplete("pagination_page_limit", len(pages), len(rows_out))
 
+    def _student_key(self, row) -> str | None:
+        """The Org Defined ID (the MyColleges student id) for one activity row, or None.
+
+        Joined through the classlist by the row's BrightSpace user id (the row's name is only a cross-check).
+        A row without a trustworthy user id is unresolved: there is no name-only match.
+        """
+        classlist = getattr(self, "classlist", None)
+        if not classlist:
+            return None
+        return classlist.resolve(row[0], getattr(row, "user_id", None))
+
+    # Reads the classlist table by header label (Name, Org Defined ID, Role). The row's internal user id is the
+    # digits after the underscore in its checkbox value (read live 2026-11-10); the Email link's
+    # EmailUser(<id>) is the same id and is used as a cross-check.
+    _CLASSLIST_JS = """
+        var tables = Array.from(document.querySelectorAll('table'));
+        var table = tables.find(function (t) {
+          return Array.from(t.querySelectorAll('th')).some(function (h) {
+            return /org\\s*defined\\s*id/i.test(h.innerText || '');
+          });
+        });
+        if (!table) { return null; }
+        var rows = Array.from(table.querySelectorAll('tr'));
+        var headerRow = rows.find(function (r) {
+          return r.querySelector('th') && /org\\s*defined\\s*id/i.test(r.innerText || '');
+        });
+        var heads = Array.from(headerRow.children).map(function (c) {
+          return (c.innerText || '').replace(/\\s+/g, ' ').trim();
+        });
+        var nameAt = heads.findIndex(function (h) { return /^name\\b/i.test(h); });
+        var orgAt = heads.findIndex(function (h) { return /org\\s*defined\\s*id/i.test(h); });
+        var roleAt = heads.findIndex(function (h) { return /^role/i.test(h); });
+        var out = [];
+        rows.forEach(function (r) {
+          if (r === headerRow || r.children.length !== heads.length) { return; }
+          var box = r.querySelector("input[type='checkbox']");
+          if (!box) { return; }
+          var boxId = (box.value || '').match(/_(\\d+)$/);
+          var mail = (r.innerHTML || '').match(/EmailUser\\((\\d+)\\)/);
+          var cell = function (i) { return i < 0 ? '' : (r.children[i].innerText || '').trim(); };
+          out.push({user: boxId ? boxId[1] : '', mail: mail ? mail[1] : '', name: cell(nameAt),
+                    org: cell(orgAt), role: cell(roleAt)});
+        });
+        return {headers: heads, nameAt: nameAt, orgAt: orgAt, rows: out};
+    """
+
+    def _read_classlist(self) -> Classlist | None:
+        """Read every learner's name, Org Defined ID and BrightSpace user id from the course classlist.
+
+        Kept in memory only (see ``student_identity``). None, with a scrape problem, when the table cannot be
+        read completely: attendance then writes nothing for rows it cannot tie to a learner.
+        """
+        match = re.search(r"/home/(\d+)", str(getattr(self, "url", "") or ""))
+        if not match:
+            self._scrape_problem("classlist not read: the course id is not in the course url")
+            return None
+        parsed = urlparse(self.url)
+        classlist_url = urlunparse((parsed.scheme or "https", parsed.netloc, "/d2l/lms/classlist/classlist.d2l",
+                                    "", urlencode((("ou", match.group(1)),)), ""))
+        main_tab = self.driver.current_window_handle
+        classlist_tab = None
+        try:
+            handles = set(self.driver.window_handles)
+            self.driver.switch_to.new_window("tab")
+            classlist_tab = self.driver.current_window_handle
+            self.wait.until(EC.new_window_is_opened(handles))
+            self.driver.get(classlist_url)
+            wait_for_ajax(self.driver)
+            if not self.click_max_results_select(self.select_xpath) or not self.results_page_size:
+                raise _EVAReadIncomplete("classlist_page_size_unverified")
+            data = None
+            for _attempt in range(10):
+                data = self.driver.execute_script(self._CLASSLIST_JS)
+                if isinstance(data, dict) and data.get("rows"):
+                    break
+                time.sleep(1)
+            if not isinstance(data, dict) or not data.get("rows"):
+                raise _EVAReadIncomplete("classlist_table_missing")
+            if data.get("nameAt", -1) < 0 or data.get("orgAt", -1) < 0:
+                raise _EVAReadIncomplete("classlist_columns_missing")
+            rows = data["rows"]
+            if (len(rows) >= self.results_page_size or self._visible_pager_hint()
+                    or self._page_text_shows_more()):
+                raise _EVAReadIncomplete("classlist_may_have_more_pages")
+            good, bad_learners = [], 0
+            for entry in rows:
+                user = str(entry.get("user") or "")
+                mail = str(entry.get("mail") or "")
+                name = next((line.strip() for line in str(entry.get("name") or "").splitlines() if line.strip()), "")
+                org = str(entry.get("org") or "").strip()
+                role = str(entry.get("role") or "").casefold()
+                row_ok = bool(user and name and ORG_ID_RE.fullmatch(org) and (not mail or mail == user))
+                if row_ok:
+                    good.append({"user": user, "org": org, "name": name})
+                elif not re.search(r"instructor|assistant|designer|observer|guest", role):
+                    # Any row that is not explicitly a staff role and cannot be read could be a learner.
+                    bad_learners += 1
+            if bad_learners or not good:
+                raise _EVAReadIncomplete("classlist_rows_unreadable")
+            classlist = build_classlist(good)
+            logger.info("Classlist read for %s: %d learner(s) with an Org Defined ID.",
+                        self.get_course_and_section(), len(classlist))
+            return classlist
+        except (_EVAReadIncomplete, WebDriverException, ValueError, TypeError, AttributeError) as error:
+            code = error.code if isinstance(error, _EVAReadIncomplete) else type(error).__name__
+            self._scrape_problem("classlist not read (%s): activity cannot be tied to students" % code)
+            return None
+        finally:
+            if classlist_tab is not None and classlist_tab in self.driver.window_handles:
+                self.driver.switch_to.window(classlist_tab)
+                close_tab(self.driver)
+            if main_tab in self.driver.window_handles:
+                self.driver.switch_to.window(main_tab)
+
     def get_eva_activity_completions(self, activity: dict,
                                      now: DT.datetime | None = None) -> EVACompletionResult:
         """Scrape every page; return no records unless the full scan is complete."""
@@ -1255,7 +1410,9 @@ class BrightSpace_Course:
             start = convert_date_to_datetime(self.course_start_date).date()
             cutoff = self.eva_date
             result: dict[str, list[str]] = defaultdict(list)
-            for name, raw_date in rows:
+            unresolved = 0
+            for row in rows:
+                name, raw_date = row
                 if not looks_like_a_scraped_date(raw_date):
                     raise _EVAReadIncomplete("invalid_completion_date", pages_read, len(rows))
                 try:
@@ -1270,7 +1427,14 @@ class BrightSpace_Course:
                     raise _EVAReadIncomplete("future_completion_date", pages_read, len(rows))
                 if completed < start or (cutoff and completed > cutoff):
                     continue
-                result[completed.strftime("%m-%d-%Y")].append(name)
+                student = self._student_key(row)
+                if student is None:
+                    unresolved += 1
+                    continue
+                result[completed.strftime("%m-%d-%Y")].append(student)
+            if unresolved:
+                logger.warning("%d EVA completion row(s) could not be tied to a classlist student.", unresolved)
+                raise _EVAReadIncomplete("student_not_in_classlist", pages_read, len(rows))
             for date_text, names in result.items():
                 result[date_text] = list(dict.fromkeys(names))
             self._emit_activity_diagnostic(
@@ -1406,8 +1570,9 @@ class BrightSpace_Course:
                             raise _EVAReadIncomplete("quiz_results_not_loaded")
                         rows, pages_read = self._read_activity_rows(generic_table, name_cell, date_cell, source_url)
                 pending: dict[str, list[str]] = defaultdict(list)
-                register_students(name for name, _date in rows)
-                for name, raw_date in rows:
+                unresolved = 0
+                for row in rows:
+                    name, raw_date = row
                     if not looks_like_a_scraped_date(raw_date):
                         raise _EVAReadIncomplete("invalid_completion_date")
                     try:
@@ -1420,12 +1585,21 @@ class BrightSpace_Course:
                         raise _EVAReadIncomplete("future_completion_date")
                     if completed < course_start or completed > course_end:
                         continue
-                    pending[completed.strftime("%m-%d-%Y")].append(name)
+                    student = self._student_key(row)
+                    if student is None:
+                        unresolved += 1
+                        continue
+                    pending[completed.strftime("%m-%d-%Y")].append(student)
                 # Due-date eligibility is decided by the caller. Preserve the
                 # activity's actual submission dates, including earlier dates.
                 for date, names in pending.items():
                     existing = self.attendance_records.setdefault(date, [])
                     existing.extend(name for name in names if name not in existing)
+                if unresolved:
+                    # Resolved students above are exact; these rows cannot be tied to one learner, so they
+                    # are never written and the course stays incomplete.
+                    self._scrape_problem("%s: %d completion row(s) could not be tied to a classlist student"
+                                         % (activity_type, unresolved))
                 self._emit_activity_diagnostic(
                     scope="ordinary", activity_type=activity_type,
                     title=(getattr(self.driver, "title", "") or "").split("|")[0].strip(),

@@ -71,6 +71,7 @@ _URL_NUMERIC_SEGMENT_RE = re.compile(r"/\d{3,}(?=/|$)")
 _lock = threading.RLock()
 _known_names: dict[str, str] = {}  # compact variant -> alias
 _known_patterns: list[str] = []  # regex for each variant, whitespace-tolerant
+_pattern_key: dict[str, str] = {}  # pattern -> its registry key (so one student can be forgotten)
 _known_tokens: dict[str, str] = {}  # exact id/email tokens -> alias
 _names_re: re.Pattern | None = None
 _alias_key: bytes | None = None
@@ -171,14 +172,19 @@ def register_student(
         *,
         student_id: Any = None,
         email: str | None = None,
+        tokens: Iterable[Any] = (),
+        alias_key: Any = None,
 ) -> str:
     """Teach the redactor a student's identifiers. Returns the student's alias.
 
     Call this wherever a roster, withdrawal record, submission folder or learner
-    list is read, before anything about that student is logged.
+    list is read, before anything about that student is logged. ``alias_key`` (for
+    example the Org Defined ID) makes the alias depend on that value instead of the
+    name, so a changed spelling cannot change it; ``tokens`` are further exact ids
+    (such as a BrightSpace user id) to scrub.
     """
     global _names_re
-    canonical = name or email or student_id
+    canonical = alias_key or name or email or student_id
     student_alias = alias(canonical)
 
     with _lock:
@@ -189,13 +195,13 @@ def register_student(
                 if key not in _known_names:
                     _known_names[key] = student_alias
                     # Tolerate the separators filenames use: "AdaExample", "Ada_Example".
-                    _known_patterns.append(
-                        r"[\s_.\-]*".join(re.escape(part) for part in variant.split())
-                    )
+                    pattern = r"[\s_.\-]*".join(re.escape(part) for part in variant.split())
+                    _known_patterns.append(pattern)
+                    _pattern_key[pattern] = key
                     changed = True
             if changed:
                 _names_re = None
-        for token in (student_id, email):
+        for token in (student_id, email, *tokens):
             if token is not None and len(str(token).strip()) >= 3:
                 _known_tokens[str(token).strip().lower()] = student_alias
     return student_alias
@@ -213,8 +219,31 @@ def clear_registry() -> None:
     with _lock:
         _known_names.clear()
         _known_patterns.clear()
+        _pattern_key.clear()
         _known_tokens.clear()
         _names_re = None
+
+
+def forget_students(alias_keys: Iterable[Any]) -> int:
+    """Remove these students' registered spellings, ids and tokens from the registry; returns how many.
+
+    ``alias_keys`` are the values given as ``alias_key`` to :func:`register_student` (the Org Defined IDs).
+    Aliases stay stable (they are an HMAC of the key), but the process stops holding the name-to-id link.
+    """
+    global _names_re
+    aliases = {alias(key) for key in alias_keys}
+    removed = 0
+    with _lock:
+        for key in [k for k, v in _known_names.items() if v in aliases]:
+            del _known_names[key]
+        for token in [t for t, v in _known_tokens.items() if v in aliases]:
+            del _known_tokens[token]
+            removed += 1
+        _known_patterns[:] = [p for p in _known_patterns if _pattern_key.get(p) in _known_names]
+        for pattern in [p for p in _pattern_key if _pattern_key[p] not in _known_names]:
+            del _pattern_key[pattern]
+        _names_re = None
+    return removed
 
 
 def _reset_alias_key_for_tests() -> None:

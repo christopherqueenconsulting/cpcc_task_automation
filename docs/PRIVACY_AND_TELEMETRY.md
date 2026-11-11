@@ -43,7 +43,26 @@ traceback before anything is written.
   it registers each student. After that, every spelling of the name becomes the
   student's alias, for example `Last, First`, `First Last`, `LAST FIRST` or
   `First_Last.java`. Registered IDs and e-mails become the alias too.
-- **Aliases** look like `student_3f9a2c1d`. Each is an HMAC of the name under a
+- **Attendance identity (classlist).** Take Attendance ties BrightSpace activity to
+  MyColleges students by id, never by name text. Per course it reads the BrightSpace
+  classlist once (name, Org Defined ID and BrightSpace user id per learner) into
+  memory. Each activity row's own BrightSpace user id picks the classlist row, whose
+  Org Defined ID is the MyColleges student id; there is no name-only fallback, so a
+  row without a trustworthy user id is never written. The name/id table lives only
+  in that run's memory: it is never written to disk or pickled, and when collection
+  ends (also when it fails) it is dropped together with the log redactor's copy of
+  those names, ids and user ids. The attendance records and ledger hold Org Defined
+  IDs only. While the table exists every learner is registered with the redactor
+  under an alias keyed by the Org Defined ID, and afterwards logs carry only that
+  alias (no names, ids or id fragments). A row that cannot be tied to exactly one
+  classlist learner keeps the course incomplete. Other places student ids persist
+  by design and predate this: other registrations with the log redactor (the
+  withdrawals list, submission folders, grading) last for the process, since only the
+  classlist's are scoped and dropped; the attendance ledger (`~/.cqc_cpcc/attendance.sqlite3`,
+  ids and dates, no names) and the `0600` missing-entry CSV a dry run writes (ids,
+  dates, course). Log files keep stable aliases across runs and are pruned after
+  the configured retention days.
+- **Aliases** look like `student_3f9a2c1d`. Each is an HMAC of the name (for a classlist learner, of the Org Defined ID) under a
   machine-local key, `~/.cqc_cpcc/pii_alias.key`, created on first use with mode
   `0600`, or `CQC_PII_ALIAS_KEY` if you set it. The same student gets the same alias
   on every run, so you can follow one student through the logs. An alias cannot be
