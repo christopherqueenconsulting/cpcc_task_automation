@@ -432,6 +432,7 @@ def test_write_one_student_no_score_field_reports_not_found(mocker):
     # Patch the hydration wait directly so the test doesn't sit through the poll timeout.
     mocker.patch.object(wb, "_wait_for_write_targets", return_value={"score": False, "feedback": False})
     mocker.patch.object(wb, "_locate_save_draft", return_value=False)
+    mocker.patch.object(wb, "_locate_update", return_value=False)
     save = mocker.patch.object(wb, "_save_draft")
     o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
     item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
@@ -447,6 +448,7 @@ def test_write_one_student_refuses_write_when_save_draft_control_missing(mocker)
     mocker.patch.object(wb, "_wait_for_write_targets",
                         return_value={"score": True, "feedback": True})
     mocker.patch.object(wb, "_locate_save_draft", return_value=False)
+    mocker.patch.object(wb, "_locate_update", return_value=False)
     save = mocker.patch.object(wb, "_save_draft")
     fill = mocker.patch.object(wb, "_fill_score")
     feedback = mocker.patch.object(wb, "_write_feedback_via_editor")
@@ -1180,3 +1182,68 @@ def test_select_rubric_levels_drops_missing_optional_criterion():
     res = wb._select_rubric_levels(driver, sels, dry_run=True)
     assert [m["criterion"] for m in res["missing"]] == ["Style", "Overall Score"]
     assert res["missing"][1]["reason"] == "level not found"
+
+
+def _published_page(mocker):
+    """An already-published evaluation page: Update/Retract, no Save Draft."""
+    mocker.patch("time.sleep")
+    mocker.patch.object(wb, "_wait_for_write_targets",
+                        return_value={"score": True, "feedback": True})
+    mocker.patch.object(wb, "_select_rubric_levels", return_value={"selected": [], "missing": []})
+    mocker.patch.object(wb, "_locate_save_draft", return_value=False)
+    mocker.patch.object(wb, "_locate_update", return_value=True)
+    mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    return (mocker.patch.object(wb, "_save_draft", return_value=True),
+            mocker.patch.object(wb, "_click_commit", return_value=True))
+
+
+@pytest.mark.unit
+def test_write_one_student_skips_published_learner_by_default(mocker):
+    save, commit = _published_page(mocker)
+    o = wb.StudentWriteOutcome("k", "Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(MagicMock(), MagicMock(), item, o, lambda *_: None, dry_run=False)
+    assert o.already_published and not o.saved and o.score_written is None
+    assert "already published" in o.note and "Update published grades" in o.note
+    save.assert_not_called()
+    commit.assert_not_called()
+
+
+@pytest.mark.unit
+def test_write_one_student_updates_published_learner_when_opted_in(mocker):
+    save, commit = _published_page(mocker)
+    o = wb.StudentWriteOutcome("k", "Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(MagicMock(), MagicMock(), item, o, lambda *_: None,
+                          dry_run=False, update_published=True)
+    assert o.saved and o.score_written == 90 and o.note.startswith("updated")
+    save.assert_not_called()                     # never Save Draft on a published page
+    assert commit.call_count == 2                # feedback cycle + score cycle
+    for call in commit.call_args_list:
+        include, exclude = call.args[1], call.args[2]
+        assert include == ("update",)
+        assert "retract" in exclude and "publish" in exclude
+
+
+@pytest.mark.unit
+def test_write_one_student_dry_run_reports_published_update(mocker):
+    save, commit = _published_page(mocker)
+    o = wb.StudentWriteOutcome("k", "Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(MagicMock(), MagicMock(), item, o, lambda *_: None,
+                          dry_run=True, update_published=True)
+    assert o.fields_found and not o.saved and "will republish" in o.note
+    save.assert_not_called()
+    commit.assert_not_called()
+
+
+@pytest.mark.unit
+def test_locate_update_never_matches_retract_or_publish():
+    driver = MagicMock()
+    driver.execute_script.return_value = True
+    assert wb._locate_update(driver) is True
+    _, include, exclude = driver.execute_script.call_args.args
+    assert include == ["update"]
+    assert "retract" in exclude and "publish" in exclude

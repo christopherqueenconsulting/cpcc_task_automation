@@ -454,6 +454,7 @@ class StudentWriteOutcome:
     feedback_attached: bool = False     # feedback .docx uploaded as an attachment (attach mode)
     rubric_selected: int = 0            # rubric levels selected (or matched, in dry-run)
     rubric_missing: list = field(default_factory=list)  # [{criterion, level, reason}]
+    already_published: bool = False     # page offered Update/Retract, not Save Draft
     note: str = ""
 
 
@@ -564,6 +565,7 @@ def push_grades_to_brightspace(
         mfa_handler=None,
         dry_run: bool = True,
         feedback_mode: str = "attach",
+        update_published: bool = False,
 ) -> GradeWriteReport:
     """Write each student's buffered score + feedback as a DRAFT (never Publish).
 
@@ -584,6 +586,10 @@ def push_grades_to_brightspace(
             written per student as a draft. ``"inline"`` injects ``item.feedback_html`` into the feedback
             editor per student. Attach mode falls back to inline per-item only on the quiz
             route when a doc path is missing.
+        update_published: Assignment route only. A learner whose grade is already
+            published has no Save Draft, only Update/Retract. False (default) skips them
+            with an "already published" note; True clicks Update, which republishes the
+            new score and feedback to the student immediately.
 
     Returns:
         A :class:`GradeWriteReport` describing per-student matched/written/saved state.
@@ -607,7 +613,7 @@ def push_grades_to_brightspace(
                                        dry_run, feedback_mode)
         else:
             report = _push_assignment_grades(driver, wait, url, items, progress, mfa_handler,
-                                             dry_run, feedback_mode)
+                                             dry_run, feedback_mode, update_published)
         if not dry_run:
             missed_fb = [
                 o.display_name for o in report.outcomes
@@ -660,7 +666,8 @@ def _push_quiz_grades(driver, wait, url, items, progress, mfa_handler, dry_run,
 
 
 def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry_run,
-                            feedback_mode: str = "attach") -> GradeWriteReport:
+                            feedback_mode: str = "attach",
+                            update_published: bool = False) -> GradeWriteReport:
     """Assignment route: open each student's evaluation page from the submissions list.
 
     Navigation VERIFIED LIVE 2026-07-01: learners + userIds are scraped from the
@@ -739,7 +746,8 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
             continue
         # Attach mode: feedback already went out in the bulk import -> score/rubric only.
         _write_one_student(driver, wait, m.item, outcome, progress, dry_run,
-                           "none" if feedback_mode == "attach" else feedback_mode)
+                           "none" if feedback_mode == "attach" else feedback_mode,
+                           update_published=update_published)
         if bulk_outcome is not None and bulk_outcome.note:
             outcome.note = f"{outcome.note}; feedback doc: {bulk_outcome.note}"
         report.outcomes.append(outcome)
@@ -1165,13 +1173,18 @@ def _ensure_score_committed(driver, score, attempts: int = 4) -> bool:
 
 
 def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWriteOutcome,
-                       progress, dry_run: bool, feedback_mode: str = "attach") -> None:
+                       progress, dry_run: bool, feedback_mode: str = "attach",
+                       update_published: bool = False) -> None:
     """Locate (and, when not dry_run, fill + save-draft) one student's score + feedback.
 
     ``feedback_mode="none"`` writes score + rubric only (used after the assignment bulk
     feedback-doc import). A rubric criterion/level that cannot be matched is reported in
     ``outcome.rubric_missing`` (and fails ``report.complete``) but no longer blocks the
     score and feedback: the typed overall score persists independently of the rubric.
+
+    A learner whose grade is already published shows Update/Retract instead of Save
+    Draft (VERIFIED LIVE 2026-11-11). They are skipped unless ``update_published``, in
+    which case every save clicks Update and the change reaches the student at once.
     """
     skip_feedback = feedback_mode == "none"
     attach = not skip_feedback and _use_attach(feedback_mode, item)
@@ -1182,6 +1195,16 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
     rubric_selected = rubric_check.get("selected") or []
     rubric_missing = rubric_check.get("missing") or []
     save_target = _locate_save_draft(driver)
+    published = not save_target and _locate_update(driver)
+    outcome.already_published = published
+    if published and update_published:
+        save_target = True
+
+    def commit() -> bool:
+        if published:
+            return _click_commit(driver, ("update",), UPDATE_EXCLUDE_TEXTS)
+        return _save_draft(driver)
+
     if skip_feedback:
         feedback_target = True
         feedback_name = ""
@@ -1198,7 +1221,11 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
     checks = [f"score {'found' if targets.get('score') else 'NOT found'}"]
     if feedback_name:
         checks.append(f"{feedback_name} {'found' if feedback_target else 'NOT found'}")
-    checks.append(f"Save Draft {'found' if save_target else 'NOT found'}")
+    if published:
+        checks.append("already published (Update" + (", will republish)" if update_published
+                                                    else " only; not changed)"))
+    else:
+        checks.append(f"Save Draft {'found' if save_target else 'NOT found'}")
     if item.rubric_selections:
         rub = f"rubric {outcome.rubric_selected}/{len(item.rubric_selections)} matched"
         if rubric_missing:
@@ -1206,6 +1233,11 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
                 f"{m.get('criterion', '?')} -> {m.get('level', '?')} [{m.get('reason', '')}]"
                 for m in rubric_missing) + ")"
         checks.append(rub)
+    if published and not update_published and targets.get("score") and feedback_target:
+        outcome.note = ("already published — not changed (tick “Update published grades” "
+                        "to overwrite): " + "; ".join(checks))
+        progress(f"{item.display_name}: {outcome.note}")
+        return
     if not outcome.fields_found:
         outcome.note = "write targets incomplete: " + "; ".join(checks)
         progress(f"{item.display_name}: {outcome.note}")
@@ -1242,26 +1274,32 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
             _fill_score(driver, item.score)
             if _ensure_score_committed(driver, item.score):
                 outcome.score_written = item.score
-            outcome.saved = _save_draft(driver)
+            outcome.saved = commit()
         else:
             # PHASE A: feedback (+ rubric) -> Save Draft.
             outcome.feedback_written = _write_feedback_via_editor(driver, wait, item.feedback_html)
             _t.sleep(0.6)
-            _save_draft(driver)
+            commit()
             _t.sleep(1.5)  # let the feedback commit settle before the score save cycle
             # PHASE B: score LAST, in its own save cycle (no editor commit in flight).
             _fill_score(driver, item.score)
             if _ensure_score_committed(driver, item.score):
                 outcome.score_written = item.score
-            outcome.saved = _save_draft(driver)
+            outcome.saved = commit()
 
-        outcome.note = "saved as draft" if outcome.saved else "filled but Save Draft not found — NOT saved"
+        if published:
+            outcome.note = ("updated (republished to student)" if outcome.saved
+                            else "filled but Update click failed — NOT saved")
+        else:
+            outcome.note = ("saved as draft" if outcome.saved
+                            else "filled but Save Draft not found — NOT saved")
         if outcome.rubric_missing:
             outcome.note += f"; {len(outcome.rubric_missing)} rubric level(s) NOT set"
         rub = (f"; {outcome.rubric_selected}/{len(item.rubric_selections)} rubric level(s)"
                if item.rubric_selections else "")
+        done = "updated" if published else "saved draft"
         progress(f"{item.display_name}: wrote {item.score}/{item.max_points}{rub} "
-                 f"({'saved draft' if outcome.saved else 'not saved'})")
+                 f"({done if outcome.saved else 'not saved'})")
     except Exception as e:  # noqa: BLE001
         outcome.note = f"write error: {e}"
         logger.warning("Write failed for %s: %s", item.display_name, e)
@@ -1359,6 +1397,22 @@ def _locate_save_draft(driver) -> bool:
         ))
     except Exception as e:  # noqa: BLE001
         logger.info("Save Draft lookup failed: %s", e)
+        return False
+
+
+# An already-published assignment evaluation shows "Update" + "Retract" and no "Save
+# Draft" (VERIFIED LIVE 2026-11-11). Never match Retract or any Publish control.
+UPDATE_EXCLUDE_TEXTS = ("retract", "publish", "cancel", "close")
+
+
+def _locate_update(driver) -> bool:
+    """Check for the published-grade Update control without clicking it."""
+    try:
+        return bool(driver.execute_script(
+            _LOCATE_SAVE_DRAFT_JS, ["update"], list(UPDATE_EXCLUDE_TEXTS)
+        ))
+    except Exception as e:  # noqa: BLE001
+        logger.info("Update lookup failed: %s", e)
         return False
 
 
