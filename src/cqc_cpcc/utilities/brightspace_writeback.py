@@ -212,6 +212,15 @@ class RubricLevelSelection:
     """
     criterion_name: str
     level_label: str
+    # Optional selections (the "Overall Score" row) are clicked when the BrightSpace
+    # rubric has that row, and silently skipped when it does not.
+    optional: bool = False
+
+
+# Name of the BrightSpace rubric row that holds the overall band. VERIFIED LIVE
+# 2026-11-11 (CSC134 "Project Grading Rubric": rows "Program Performance" and
+# "Overall Score", same eight levels). Write-back fills it from overall_band_label.
+OVERALL_SCORE_CRITERION = "Overall Score"
 
 
 @dataclass
@@ -303,6 +312,13 @@ def build_write_items_from_results(
                 selections.append(RubricLevelSelection(
                     criterion_name=str(cname), level_label=str(level),
                 ))
+        band = _get(result, "overall_band_label")
+        if band and not any(
+                _normalize_name(s.criterion_name) == _normalize_name(OVERALL_SCORE_CRITERION)
+                for s in selections):
+            selections.append(RubricLevelSelection(
+                criterion_name=OVERALL_SCORE_CRITERION, level_label=str(band), optional=True,
+            ))
         items.append(GradeWriteItem(
             student_key=student_id, display_name=display or student_id,
             raw_score=raw, score=buffered, max_points=max_pts, feedback_html=feedback,
@@ -936,17 +952,28 @@ return {selected: selected, missing: missing};
 
 
 def _select_rubric_levels(driver, selections: list, dry_run: bool) -> dict:
-    """Select each criterion's rubric level (or, in dry-run, just report matches)."""
+    """Select each criterion's rubric level (or, in dry-run, just report matches).
+
+    An ``optional`` selection whose criterion is not on the page is dropped from
+    ``missing`` (the rubric simply has no such row).
+    """
     payload = [{"criterion": s.criterion_name, "level": s.level_label} for s in selections]
     if not payload:
         return {"selected": [], "missing": []}
     try:
-        return driver.execute_script(_SELECT_RUBRIC_LEVELS_JS, payload, dry_run) or {
+        res = driver.execute_script(_SELECT_RUBRIC_LEVELS_JS, payload, dry_run) or {
             "selected": [], "missing": []
         }
     except Exception as e:  # noqa: BLE001
         logger.info("Rubric level selection failed: %s", e)
         return {"selected": [], "missing": [{"reason": str(e)}]}
+    optional = {_normalize_name(s.criterion_name) for s in selections if s.optional}
+    res["missing"] = [
+        m for m in (res.get("missing") or [])
+        if not (m.get("reason") == "criterion not found"
+                and _normalize_name(m.get("criterion", "")) in optional)
+    ]
+    return res
 
 
 # Deep-DOM JS: set the overall SCORE input. It's a D2L Lit component, so we set it via

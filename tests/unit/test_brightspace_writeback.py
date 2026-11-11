@@ -471,7 +471,7 @@ def test_build_write_items_populates_rubric_selections():
                             selected_level_label=None, feedback="")  # no level -> skipped
     results = [("id - Jane Doe - Oct 1, 2025 100 PM", _result(29, 35, criteria=[crit1, crit2]))]
     items = wb.build_write_items_from_results(results, buffer_pct=0)
-    sels = items[0].rubric_selections
+    sels = [s for s in items[0].rubric_selections if not s.optional]  # band row is optional
     assert len(sels) == 1
     assert sels[0].criterion_name == "Program Performance"
     assert sels[0].level_label == "Above Average"
@@ -1152,3 +1152,31 @@ def test_find_score_input_js_tries_selectors_in_priority_order():
     assert js.index("for(const sel of SELS)") < js.index("for(const el of all)")
     assert wb.SCORE_INPUT_SELECTORS.index("input[aria-label^='Overall grade' i]") < \
         wb.SCORE_INPUT_SELECTORS.index("input[aria-label*='Score' i]")
+
+
+@pytest.mark.unit
+def test_build_write_items_adds_optional_overall_score_row():
+    """The overall band fills BrightSpace's "Overall Score" rubric row (live 2026-11-11)."""
+    result = {"total_points_earned": 27, "total_points_possible": 30, "overall_feedback": "ok",
+              "overall_band_label": "Superior",
+              "criteria_results": [{"criterion_name": "Program Performance",
+                                    "selected_level_label": "Superior"}]}
+    [item] = wb.build_write_items_from_results([("1-2 - Jane Doe", result)], buffer_pct=0)
+    names = [(s.criterion_name, s.level_label, s.optional) for s in item.rubric_selections]
+    assert names == [("Program Performance", "Superior", False),
+                     ("Overall Score", "Superior", True)]
+
+
+@pytest.mark.unit
+def test_select_rubric_levels_drops_missing_optional_criterion():
+    driver = MagicMock()
+    driver.execute_script.return_value = {"selected": [], "missing": [
+        {"criterion": "Overall Score", "level": "Superior", "reason": "criterion not found"},
+        {"criterion": "Style", "level": "Full", "reason": "criterion not found"},
+        {"criterion": "Overall Score", "level": "Bogus", "reason": "level not found"},
+    ]}
+    sels = [wb.RubricLevelSelection("Style", "Full"),
+            wb.RubricLevelSelection("Overall Score", "Superior", optional=True)]
+    res = wb._select_rubric_levels(driver, sels, dry_run=True)
+    assert [m["criterion"] for m in res["missing"]] == ["Style", "Overall Score"]
+    assert res["missing"][1]["reason"] == "level not found"
