@@ -200,3 +200,6 @@ evals/runs/
 
 # Generated at deploy time onto the `release` branch only (deploy-release.yml).
 /requirements.txt
+
+# Local write-back probe reports (learner names scrubbed, still course data)
+output/writeback_probe/

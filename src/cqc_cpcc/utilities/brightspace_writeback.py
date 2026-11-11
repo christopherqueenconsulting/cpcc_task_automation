@@ -477,9 +477,7 @@ class GradeWriteReport:
                 if self.route == "assignment":
                     delivered = (outcome.feedback_attached if self.feedback_mode == "attach"
                                  else outcome.feedback_written)
-                    if not delivered or (
-                        self.feedback_mode == "inline" and outcome.score_written is None
-                    ):
+                    if not delivered or outcome.score_written is None:
                         return False
         return True
 
@@ -566,8 +564,8 @@ def push_grades_to_brightspace(
             ``.docx`` (``item.feedback_doc_path``). On the QUIZ route each doc is uploaded
             to that attempt's attachment widget alongside the posted score; on the
             ASSIGNMENT route all docs go out in ONE bulk "Add Feedback Files" ZIP import
-            (matched to submitters by submission-ID; scores are written separately via
-            inline mode). ``"inline"`` injects ``item.feedback_html`` into the feedback
+            (matched to submitters by submission-ID), then each score and rubric is
+            written per student as a draft. ``"inline"`` injects ``item.feedback_html`` into the feedback
             editor per student. Attach mode falls back to inline per-item only on the quiz
             route when a doc path is missing.
 
@@ -655,10 +653,11 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
     In dry-run we open the page and LOCATE the score/feedback fields but write
     nothing. The actual fill + Save-as-draft click is still guarded by ``dry_run``.
 
-    In ATTACH mode the assignment route does NOT navigate per student: it delivers all
-    clean feedback ``.docx`` files in one bulk "Add Feedback Files" ZIP import (matched
-    to submitters by the leading submission-ID), and writes no scores here — scores use
-    inline mode. See :func:`_import_assignment_feedback_docs`.
+    In ATTACH mode the assignment route first delivers all clean feedback ``.docx``
+    files in one bulk "Add Feedback Files" ZIP import (matched to submitters by the
+    leading submission-ID; see :func:`_import_assignment_feedback_docs`), then opens
+    each student's evaluation page to write the score and rubric levels (no inline
+    feedback) and Save Draft.
     """
     from cqc_cpcc.utilities.brightspace_fetch import _open_and_login, _set_max_results_per_page
 
@@ -669,22 +668,23 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
     # Gate attach on files that actually EXIST on disk (a truthy-but-stale temp path
     # otherwise produced an empty report that looked like a total failure).
     doc_items = [it for it in items if it.feedback_doc_path and os.path.exists(it.feedback_doc_path)]
+    bulk_by_key: dict = {}
     if feedback_mode == "attach":
+        # Feedback docs go out in ONE bulk "Add Feedback Files" import; scores and rubric
+        # levels are then written per student below (the import writes no scores).
         if doc_items:
-            return _import_assignment_feedback_docs(
-                driver, url, items, doc_items, report, progress, dry_run)
-        # Attach chosen but no feedback docs are on disk — report clearly (non-empty)
-        # instead of silently failing, so the instructor knows exactly what to do.
-        report.warnings.append(
-            "Attach mode: no feedback .docx files were found on disk for these students. "
-            "Re-generate the feedback documents above, then retry — or switch “Feedback "
-            "delivery” to “Add feedback directly”. (Attach mode writes feedback docs only, "
-            "not scores.)")
-        for it in items:
-            report.outcomes.append(StudentWriteOutcome(
-                student_key=it.student_key, display_name=it.display_name, matched=False,
-                note="no feedback .docx on disk to import"))
-        return report
+            bulk = _import_assignment_feedback_docs(
+                driver, url, items, doc_items,
+                GradeWriteReport(route="assignment", dry_run=dry_run,
+                                 feedback_mode=feedback_mode),
+                progress, dry_run)
+            report.warnings.extend(bulk.warnings)
+            bulk_by_key = {o.student_key: o for o in bulk.outcomes}
+        else:
+            report.warnings.append(
+                "Attach mode: no feedback .docx files were found on disk, so no feedback "
+                "was delivered. Re-generate the feedback documents above and retry, or "
+                "switch “Feedback delivery” to “Add feedback directly”.")
 
     # Learner name links (feedback,<userId>) live ONLY on the per-user submissions view;
     # _open_and_login's Submissions-tab click lands on the per-file view. Force the
@@ -714,11 +714,18 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
         outcome = StudentWriteOutcome(
             student_key=m.item.student_key, display_name=m.item.display_name, matched=True,
         )
+        bulk_outcome = bulk_by_key.get(m.item.student_key)
+        if bulk_outcome is not None:
+            outcome.feedback_attached = bulk_outcome.feedback_attached
         if not _open_assignment_evaluation(driver, wait, url, m.learner):
             outcome.note = "could not open evaluation page"
             report.outcomes.append(outcome)
             continue
-        _write_one_student(driver, wait, m.item, outcome, progress, dry_run, feedback_mode)
+        # Attach mode: feedback already went out in the bulk import -> score/rubric only.
+        _write_one_student(driver, wait, m.item, outcome, progress, dry_run,
+                           "none" if feedback_mode == "attach" else feedback_mode)
+        if bulk_outcome is not None and bulk_outcome.note:
+            outcome.note = f"{outcome.note}; feedback doc: {bulk_outcome.note}"
         report.outcomes.append(outcome)
     return report
 
@@ -1132,43 +1139,53 @@ def _ensure_score_committed(driver, score, attempts: int = 4) -> bool:
 
 def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWriteOutcome,
                        progress, dry_run: bool, feedback_mode: str = "attach") -> None:
-    """Locate (and, when not dry_run, fill + save-draft) one student's score + feedback."""
-    attach = _use_attach(feedback_mode, item)
+    """Locate (and, when not dry_run, fill + save-draft) one student's score + feedback.
+
+    ``feedback_mode="none"`` writes score + rubric only (used after the assignment bulk
+    feedback-doc import). A rubric criterion/level that cannot be matched is reported in
+    ``outcome.rubric_missing`` (and fails ``report.complete``) but no longer blocks the
+    score and feedback: the typed overall score persists independently of the rubric.
+    """
+    skip_feedback = feedback_mode == "none"
+    attach = not skip_feedback and _use_attach(feedback_mode, item)
     # Wait for every selected write target before touching any field. In inline mode
     # the feedback editor can hydrate after the score input, so require both.
-    targets = _wait_for_write_targets(driver, require_feedback=not attach)
+    targets = _wait_for_write_targets(driver, require_feedback=not attach and not skip_feedback)
     rubric_check = _select_rubric_levels(driver, item.rubric_selections, dry_run=True)
     rubric_selected = rubric_check.get("selected") or []
     rubric_missing = rubric_check.get("missing") or []
     save_target = _locate_save_draft(driver)
-    feedback_target = _locate_attach_control(driver) if attach else bool(targets.get("feedback"))
+    if skip_feedback:
+        feedback_target = True
+        feedback_name = ""
+    elif attach:
+        feedback_target = _locate_attach_control(driver)
+        feedback_name = "attach control"
+    else:
+        feedback_target = bool(targets.get("feedback"))
+        feedback_name = "inline feedback editor"
 
     outcome.rubric_selected = len(rubric_selected)
     outcome.rubric_missing = rubric_missing
-    outcome.fields_found = bool(
-        targets.get("score") and feedback_target and save_target and not rubric_missing
-    )
+    outcome.fields_found = bool(targets.get("score") and feedback_target and save_target)
+    checks = [f"score {'found' if targets.get('score') else 'NOT found'}"]
+    if feedback_name:
+        checks.append(f"{feedback_name} {'found' if feedback_target else 'NOT found'}")
+    checks.append(f"Save Draft {'found' if save_target else 'NOT found'}")
+    if item.rubric_selections:
+        rub = f"rubric {outcome.rubric_selected}/{len(item.rubric_selections)} matched"
+        if rubric_missing:
+            rub += " (unmatched: " + ", ".join(
+                f"{m.get('criterion', '?')} -> {m.get('level', '?')} [{m.get('reason', '')}]"
+                for m in rubric_missing) + ")"
+        checks.append(rub)
     if not outcome.fields_found:
-        checks = [
-            f"score {'found' if targets.get('score') else 'NOT found'}",
-            (f"attach control {'found' if feedback_target else 'NOT found'}" if attach else
-             f"inline feedback editor {'found' if feedback_target else 'NOT found'}"),
-            f"Save Draft {'found' if save_target else 'NOT found'}",
-        ]
-        if item.rubric_selections:
-            checks.append(
-                f"rubric {outcome.rubric_selected}/{len(item.rubric_selections)} matched"
-            )
         outcome.note = "write targets incomplete: " + "; ".join(checks)
         progress(f"{item.display_name}: {outcome.note}")
         return
 
     if dry_run:
         outcome.score_written = item.score
-        feedback_name = "attach control" if attach else "inline feedback editor"
-        checks = ["score found", f"{feedback_name} found", "Save Draft found"]
-        if item.rubric_selections:
-            checks.append(f"rubric {outcome.rubric_selected}/{len(item.rubric_selections)} matched")
         outcome.note = (
             f"dry run — {'; '.join(checks)}; would write {item.score} (nothing saved)"
         )
@@ -1190,10 +1207,11 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
         # in flight) and Save Draft again. The score field is a D2L Lit <d2l-input-text>
         # that ignores the JS native-value setter, so we type with REAL keystrokes
         # (_fill_score) and blur+verify (_ensure_score_committed) before saving.
-        if attach:
-            # Attach mode has no editor race — attach the .docx, set score, single save.
-            outcome.feedback_attached = _attach_feedback_file(
-                driver, item.feedback_doc_path, progress)
+        if attach or skip_feedback:
+            # No editor race here — (attach the .docx,) set score, single save.
+            if attach:
+                outcome.feedback_attached = _attach_feedback_file(
+                    driver, item.feedback_doc_path, progress)
             _fill_score(driver, item.score)
             if _ensure_score_committed(driver, item.score):
                 outcome.score_written = item.score
@@ -1211,6 +1229,8 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
             outcome.saved = _save_draft(driver)
 
         outcome.note = "saved as draft" if outcome.saved else "filled but Save Draft not found — NOT saved"
+        if outcome.rubric_missing:
+            outcome.note += f"; {len(outcome.rubric_missing)} rubric level(s) NOT set"
         rub = (f"; {outcome.rubric_selected}/{len(item.rubric_selections)} rubric level(s)"
                if item.rubric_selections else "")
         progress(f"{item.display_name}: wrote {item.score}/{item.max_points}{rub} "
@@ -1335,15 +1355,22 @@ def _click_commit(driver, include: tuple, exclude: tuple) -> bool:
 # updates the inner <input> but NOT the component's tracked value, so a later Publish/
 # Update posts the stale value. VERIFIED LIVE 2026-07-10: send_keys updates the component
 # (d2l-input-number.value 0 -> 42) while the native-setter left it at 0.
+# Selectors are tried in PRIORITY order (the overall-grade selectors first) over the
+# page in document order. Matching "any selector, first element" let a broad fallback
+# such as input[aria-label*='Score'] (a rubric criterion override) win over the
+# overall "Overall grade" input.
 _FIND_SCORE_INPUT_JS = r"""
 const SELS = arguments[0];
-function* deep(root){const s=[root.documentElement||root];while(s.length){const n=s.pop();if(!n)continue;yield n;if(n.shadowRoot)s.push(n.shadowRoot);for(const c of (n.children||[]))s.push(c);}}
-function matchesAny(el,sels){for(const s of sels){try{if(el.matches&&el.matches(s))return true;}catch(e){}}return false;}
-for(const el of deep(document)){
-  if(!matchesAny(el, SELS)) continue;
-  if((el.tagName||'').toLowerCase()==='input') return el;
-  const inp = (el.shadowRoot && el.shadowRoot.querySelector('input')) || (el.querySelector && el.querySelector('input'));
-  if(inp) return inp;
+function* deep(root){const s=[root.documentElement||root];while(s.length){const n=s.pop();if(!n)continue;yield n;const kids=[...(n.children||[])];for(let i=kids.length-1;i>=0;i--)s.push(kids[i]);if(n.shadowRoot)s.push(n.shadowRoot);}}
+const all=[...deep(document)];
+for(const sel of SELS){
+  for(const el of all){
+    let ok=false; try{ok=!!(el.matches&&el.matches(sel));}catch(e){}
+    if(!ok) continue;
+    if((el.tagName||'').toLowerCase()==='input') return el;
+    const inp = (el.shadowRoot && el.shadowRoot.querySelector('input')) || (el.querySelector && el.querySelector('input'));
+    if(inp) return inp;
+  }
 }
 return null;
 """
@@ -1733,7 +1760,8 @@ def _attach_feedback_file(driver, path: str, progress=_noop) -> bool:
 # submissions download produced (e.g. "100003-600002 - Ben Sample - Jul 7, 2026").
 # So this route delivers all clean feedback .docx files in ONE upload, no per-student
 # navigation. It only works for SUBMITTERS (a non-submitter has no download ID and is
-# silently skipped by BrightSpace). Scores/rubric are written separately (inline mode).
+# silently skipped by BrightSpace). Scores/rubric are then written per student by
+# _push_assignment_grades (feedback_mode="none").
 def build_feedback_docs_zip(feedback_docs: dict, out_path: Optional[str] = None) -> Optional[str]:
     """Bundle per-student feedback ``.docx`` files into a ZIP for bulk import.
 

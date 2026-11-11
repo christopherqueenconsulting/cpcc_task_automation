@@ -533,7 +533,9 @@ def test_write_one_student_dry_run_reports_rubric_matches_without_saving(mocker)
     rub.assert_called_once()
     assert rub.call_args.kwargs.get("dry_run") is True     # matched only, not clicked
     assert o.rubric_selected == 1 and len(o.rubric_missing) == 1 and not o.saved
-    assert not o.fields_found and "rubric 1/2 matched" in o.note
+    # An unmatched rubric level is reported but no longer blocks the score/feedback.
+    assert o.fields_found and "rubric 1/2 matched" in o.note
+    assert "Style -> Full [level not found]" in o.note
     save.assert_not_called()
 
 
@@ -883,15 +885,27 @@ def test_push_assignment_grades_attach_mode_uses_bulk_import(mocker, tmp_path):
     """Attach mode on the assignment route bulk-imports instead of per-student nav."""
     doc = tmp_path / "f.docx"; doc.write_bytes(b"x")
     mocker.patch("cqc_cpcc.utilities.brightspace_fetch._open_and_login")
-    bulk = mocker.patch.object(wb, "_import_assignment_feedback_docs",
-                               return_value=wb.GradeWriteReport(route="assignment", dry_run=False))
-    gather = mocker.patch.object(wb, "_gather_assignment_learners", return_value=[])
+    bulk_report = wb.GradeWriteReport(route="assignment", dry_run=False)
+    bulk_report.outcomes.append(wb.StudentWriteOutcome(
+        "1-2 - Jane", "Jane", matched=True, fields_found=True, saved=True,
+        feedback_attached=True, note="feedback doc imported as draft"))
+    bulk = mocker.patch.object(wb, "_import_assignment_feedback_docs", return_value=bulk_report)
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._set_max_results_per_page")
+    mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax")
+    mocker.patch.object(wb, "_gather_assignment_learners",
+                        return_value=[{"name": "Jane", "userId": "7"}])
+    mocker.patch.object(wb, "_open_assignment_evaluation", return_value=True)
+    write = mocker.patch.object(wb, "_write_one_student")
     item = wb.GradeWriteItem("1-2 - Jane", "Jane", 80, 90, 100, "<p>fb</p>",
                              feedback_doc_path=str(doc))
-    wb._push_assignment_grades(MagicMock(), MagicMock(), "url", [item], lambda *_: None,
-                               None, dry_run=False, feedback_mode="attach")
+    report = wb._push_assignment_grades(MagicMock(), MagicMock(), "url", [item],
+                                        lambda *_: None, None, dry_run=False,
+                                        feedback_mode="attach")
     bulk.assert_called_once()
-    gather.assert_not_called()   # no per-student navigation in bulk attach mode
+    # Feedback went out in bulk; each student then gets score + rubric only.
+    write.assert_called_once()
+    assert write.call_args.args[-1] == "none"
+    assert report.outcomes[0].feedback_attached is True
 
 
 @pytest.mark.unit
@@ -1058,9 +1072,9 @@ def test_push_assignment_grades_attach_no_docs_reports_clearly(mocker):
         "https://bs/d2l/lms/dropbox/admin/mark/x?ou=1&db=2", [item],
         driver=driver, wait=wait, dry_run=True, feedback_mode="attach")
     bulk.assert_not_called()    # no real docs -> no bulk import attempted
-    gather.assert_not_called()  # and no per-student navigation
+    gather.assert_called_once()  # scores are still written per student
     assert any("feedback" in w.lower() and "docx" in w.lower() for w in report.warnings)
-    assert report.outcomes and not report.outcomes[0].matched
+    assert not report.complete
 
 
 @pytest.mark.unit
@@ -1103,3 +1117,38 @@ def test_writeback_report_shows_warning_when_required_target_is_missing(mocker):
     success.assert_not_called()
     warning.assert_called_once()
     assert "incomplete" in warning.call_args.args[0]
+
+
+@pytest.mark.unit
+def test_write_one_student_score_only_mode_skips_feedback(mocker):
+    """feedback_mode="none" (after a bulk doc import) writes score + rubric, one save."""
+    driver = MagicMock()
+    mocker.patch("time.sleep")
+    wait_targets = mocker.patch.object(wb, "_wait_for_write_targets",
+                                       return_value={"score": True, "feedback": False})
+    mocker.patch.object(wb, "_locate_save_draft", return_value=True)
+    mocker.patch.object(wb, "_select_rubric_levels", return_value={"selected": [], "missing": []})
+    mocker.patch.object(wb, "_fill_score", return_value=True)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    save = mocker.patch.object(wb, "_save_draft", return_value=True)
+    inline = mocker.patch.object(wb, "_write_feedback_via_editor")
+    attach = mocker.patch.object(wb, "_attach_feedback_file")
+    o = wb.StudentWriteOutcome(student_key="k", display_name="Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>", feedback_doc_path="/x.docx")
+    wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None,
+                          dry_run=False, feedback_mode="none")
+    assert wait_targets.call_args.kwargs["require_feedback"] is False
+    inline.assert_not_called()
+    attach.assert_not_called()
+    save.assert_called_once()
+    assert o.fields_found and o.saved and o.score_written == 90
+
+
+@pytest.mark.unit
+def test_find_score_input_js_tries_selectors_in_priority_order():
+    """The overall-grade selector must win over a broad fallback earlier in the DOM."""
+    js = wb._FIND_SCORE_INPUT_JS
+    assert "for(const sel of SELS)" in js
+    assert js.index("for(const sel of SELS)") < js.index("for(const el of all)")
+    assert wb.SCORE_INPUT_SELECTORS.index("input[aria-label^='Overall grade' i]") < \
+        wb.SCORE_INPUT_SELECTORS.index("input[aria-label*='Score' i]")
