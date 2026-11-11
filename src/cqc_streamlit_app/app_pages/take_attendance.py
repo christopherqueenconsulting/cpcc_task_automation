@@ -11,6 +11,7 @@
 """
 import datetime as DT
 import os
+import time
 from zoneinfo import ZoneInfo
 
 import streamlit as st
@@ -25,6 +26,7 @@ from cqc_cpcc.attendance_job import (
     PHASE_SUCCEEDED,
     AttendanceJob,
 )
+from cqc_cpcc.pause_gate import MAX_PAUSE_SECONDS
 from cqc_cpcc.run_plan import RunPlan, course_choices
 from cqc_cpcc.utilities.date import term_for_date
 from cqc_cpcc.utilities.env_constants import WITHDRAWALS_TRACKER_DRY_RUN
@@ -37,8 +39,20 @@ from cqc_streamlit_app.utils import on_download_click, page_header, render_mfa_p
 JOB_KEY = "attendance_job"
 # The phase the last full page run drew; the live view reruns the page when it moves.
 RENDERED_PHASE_KEY = "attendance_rendered_phase"
+# The live-viewer URL the last full page run drew; the status view reruns the page when it changes.
+RENDERED_VIEWER_KEY = "attendance_rendered_viewer"
 POLL_SECONDS = 1.5
-TAB_TITLE_CHARS = 32
+# Keyed pickers: the choice lives in session state, so it survives refreshes and title changes.
+VIEW_KEY = "attendance_view"
+TAB_KEY = "attendance_snapshot_tab"
+VIEW_LIVE = "Live browser"
+VIEW_TABS = "Tab snapshots"
+VIEW_LOG = "Log"
+VIEWS = [VIEW_LIVE, VIEW_TABS, VIEW_LOG]
+DEFAULT_VIEW = VIEW_TABS
+VIEWER_HEIGHT = 640
+# MyColleges may end an idle session; warn the instructor after this long paused.
+PAUSE_WARN_SECONDS = 15 * 60
 
 # Initialize session state variables
 init_session_state()
@@ -286,13 +300,6 @@ def _placeholder_image() -> str | None:
     return st.session_state["attendance_placeholder_image"]
 
 
-def _tab_label(number: int, title: str) -> str:
-    title = (title or "Loading...").strip()
-    if len(title) > TAB_TITLE_CHARS:
-        title = title[:TAB_TITLE_CHARS - 1] + "…"
-    return "Tab %d · %s" % (number, title)
-
-
 def _screenshot_src(screenshot_b64: str) -> str:
     """A data URL, so the image travels with the page instead of as a media file.
 
@@ -303,35 +310,79 @@ def _screenshot_src(screenshot_b64: str) -> str:
     return "data:image/png;base64," + screenshot_b64
 
 
-def screenshot_section() -> None:
-    """The placeholder, replaced by each browser screenshot as the run moves along.
+def view_picker() -> str:
+    """Which view of the run to show. Drawn on the full page (not in a polled fragment),
+    so the choice is a keyed widget the timer never redraws; it survives every refresh.
 
-    "Live" shows the newest screenshot from whichever tab the run is using. Each
-    open browser tab then gets its own view with the last screenshot taken there.
+    Tab snapshots is the default: the live view costs the browser and the Docker
+    container extra work, so the instructor opens it when they want it.
+    """
+    st.segmented_control("Browser view", VIEWS, key=VIEW_KEY, default=DEFAULT_VIEW,
+                         label_visibility="collapsed")
+    # Clicking the selected option again clears it; fall back to the default then.
+    return st.session_state.get(VIEW_KEY) or DEFAULT_VIEW
+
+
+def viewer_frame(viewer_url: str) -> None:
+    """The Docker browser's screen, live. Drawn outside the polled fragments, so the
+    refresh timer never reloads it. The instructor never types the URL or signs in.
+
+    The URL asks the noVNC client to be view-only (``view_only=true``) but that is a
+    client setting: it also carries the container's VNC password, so anyone who has it
+    can connect with full control of the signed-in browser. Keep it on the page.
+    """
+    st.caption("Live view of the browser. It shows the tab the run is using; open Tab "
+               "snapshots for the others. Do not share this page or its link: it shows student records.")
+    iframe = getattr(st, "iframe", None)
+    if iframe is not None:
+        iframe(viewer_url, height=VIEWER_HEIGHT, alt="Live view of the Docker browser the run is using")
+    else:  # Streamlit before st.iframe
+        from streamlit.components.v1 import iframe as components_iframe
+
+        components_iframe(viewer_url, height=VIEWER_HEIGHT)
+
+
+def screenshot_section() -> None:
+    """The newest browser screenshot (or a placeholder before the first one).
+
+    This is the live view when the browser cannot be shown live (no Docker browser,
+    or its viewer port is not reachable).
     """
     job: AttendanceJob | None = st.session_state.get(JOB_KEY)
     screenshot = job.latest_screenshot() if job is not None else None
     if screenshot:
-        browser_tabs = job.tab_screenshots()
-        if len(browser_tabs) < 2:
-            st.image(_screenshot_src(screenshot), width="stretch")
-            return
-        labels = ["Live"] + [_tab_label(number, shot.title)
-                             for number, shot in enumerate(browser_tabs, start=1)]
-        views = st.tabs(labels)
-        with views[0]:
-            st.image(_screenshot_src(screenshot), width="stretch")
-        for view, shot in zip(views[1:], browser_tabs):
-            with view:
-                if shot.active:
-                    st.caption("The run is using this tab.")
-                st.image(_screenshot_src(shot.screenshot_b64), width="stretch")
+        st.image(_screenshot_src(screenshot), width="stretch")
         return
     placeholder = _placeholder_image()
     if placeholder:
         st.image(placeholder, width="stretch")
     else:
         st.caption("Screenshots of the browser appear here once the run starts.")
+
+
+def tab_snapshots_section() -> None:
+    """The last screenshot of each open browser tab.
+
+    Tabs are named by number and the title goes in a caption: a title changes as a
+    page loads, and a changing label would reset the picker to its first tab.
+    """
+    job: AttendanceJob | None = st.session_state.get(JOB_KEY)
+    browser_tabs = job.tab_screenshots() if job is not None else []
+    if not browser_tabs:
+        st.caption("Tab snapshots appear here once the run has opened a browser tab.")
+        return
+    labels = ["Tab %d" % number for number in range(1, len(browser_tabs) + 1)]
+    if st.session_state.get(TAB_KEY) not in labels:
+        st.session_state.pop(TAB_KEY, None)
+    st.segmented_control("Browser tab", labels, key=TAB_KEY, default=labels[0],
+                         label_visibility="collapsed")
+    chosen = st.session_state.get(TAB_KEY) or labels[0]
+    shot = browser_tabs[labels.index(chosen)]
+    caption = (shot.title or "Loading...").strip()
+    if shot.active:
+        caption += " · the run is using this tab"
+    st.caption(caption)
+    st.image(_screenshot_src(shot.screenshot_b64), width="stretch")
 
 
 EVA_COLUMNS_HELP = {
@@ -561,6 +612,32 @@ def job_section(job: AttendanceJob) -> None:
             st.rerun()
 
 
+def _paused_since_text(since: float) -> str:
+    started = DT.datetime.fromtimestamp(since, ZoneInfo("America/New_York"))
+    return started.strftime("%I:%M %p").lstrip("0") + " ET"
+
+
+def pause_controls(job: AttendanceJob) -> None:
+    """Pause freezes the run before its next browser command so the instructor can look
+    closer; Resume carries on. Offered only while the browser works on its own."""
+    if job.paused:
+        since = job.paused_since
+        st.warning("Paused%s. The browser is frozen as you see it." % (
+            " since " + _paused_since_text(since) if since else ""), icon=":material/pause_circle:")
+        if since is not None and time.time() - since >= PAUSE_WARN_SECONDS:
+            st.warning("Paused for over %d minutes. MyColleges may sign you out while "
+                       "idle; if the run fails after resuming, start it again. A pause "
+                       "resumes by itself after %d minutes."
+                       % (PAUSE_WARN_SECONDS // 60, MAX_PAUSE_SECONDS // 60),
+                       icon=":material/schedule:")
+        st.button("Resume", key="attendance_resume", type="primary",
+                  icon=":material/play_arrow:", on_click=job.resume)
+    elif job.pausable:
+        st.button("Pause", key="attendance_pause", icon=":material/pause:", on_click=job.pause)
+        st.caption("Pause freezes the run so you can look closer. Other pages cannot "
+                   "use the browser while it is paused.")
+
+
 def progress_section(job: AttendanceJob) -> None:
     """Progress, the MFA number and Cancel while the run works; part of the live view."""
     phase = job.phase
@@ -573,6 +650,7 @@ def progress_section(job: AttendanceJob) -> None:
     st.info(job.latest_progress() or "Starting...", icon=":material/progress_activity:")
     warnings_section(job)
     render_mfa_prompt(job.bridge)
+    pause_controls(job)
     # Cancel is offered until attendance marking starts; after that the run finishes
     # so no course is left half-recorded.
     if phase == PHASE_STARTING and st.button("Cancel", key="attendance_cancel", icon=":material/close:"):
@@ -592,23 +670,30 @@ def logging_section() -> None:
             height=400, wrap_lines=True)
 
 
-def live_view() -> None:
-    """Progress, screenshots and the log; refreshed on a timer while the run works."""
+def status_view() -> None:
+    """Progress, the MFA number and Pause; refreshed on a timer while the run works."""
     job: AttendanceJob | None = st.session_state.get(JOB_KEY)
-    if job is not None and job.phase != st.session_state.get(RENDERED_PHASE_KEY):
-        if _needs_full_page(job.phase):
-            # The form or finish screen is due: redraw the whole page once.
-            st.rerun(scope="app")
     if job is not None:
+        # Redraw the whole page once when the form or finish screen is due, or when
+        # the live viewer became available (the full page draws it).
+        if job.phase != st.session_state.get(RENDERED_PHASE_KEY) and _needs_full_page(job.phase):
+            st.rerun(scope="app")
+        if job.viewer_url != st.session_state.get(RENDERED_VIEWER_KEY):
+            st.rerun(scope="app")
         eva_status_section(job)
         attendance_activity_section(job)
         eva_section(job)
         progress_section(job)
-    screenshot_tab, log_tab = st.tabs(["Browser screenshot", "Log"])
-    with screenshot_tab:
-        screenshot_section()
-    with log_tab:
+
+
+def content_view(view: str) -> None:
+    """The chosen view of the run (screenshot, tab snapshots or log); refreshed on a timer."""
+    if view == VIEW_LOG:
         logging_section()
+    elif view == VIEW_TABS:
+        tab_snapshots_section()
+    else:
+        screenshot_section()
 
 
 def _file_facts(path: str) -> str:
@@ -775,8 +860,23 @@ def main():
     # attendance), so progress, screenshots, the MFA number and the log stay current
     # without redrawing the page. Waiting on the form needs no refresh.
     st.session_state[RENDERED_PHASE_KEY] = phase
+    viewer_url = job.viewer_url if job is not None else None
+    st.session_state[RENDERED_VIEWER_KEY] = viewer_url
     polling = job is not None and _needs_polling(job, phase)
-    st.fragment(live_view, run_every=POLL_SECONDS if polling else None)()
+    run_every = POLL_SECONDS if polling else None
+    st.fragment(status_view, run_every=run_every)()
+
+    # The picker and the live viewer sit on the full page, between the two polled
+    # fragments, so the timer never redraws or reloads them.
+    view = view_picker()
+    if job is not None:
+        # While the live view is open the run only snapshots on tab changes (it is cheaper);
+        # in any other view every event keeps the screenshots fresh.
+        job.live_view_open = view == VIEW_LIVE and bool(viewer_url)
+    if view == VIEW_LIVE and viewer_url:
+        viewer_frame(viewer_url)
+    else:
+        st.fragment(content_view, run_every=run_every)(view)
 
     st.subheader("Local attendance data (view only)", anchor=False)
     ledger_section()

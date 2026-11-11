@@ -25,12 +25,17 @@ services:
         # don't clash with other projects binding the Selenium defaults (4444/7900).
         ports:
           - "${SELENIUM_HOST_PORT:-14444}:4444"
-          - "${SELENIUM_VNC_PORT:-17900}:7900"
+          # noVNC, the live view on the Take Attendance page. Loopback only by default:
+          # the page and this container run on one machine. Set SELENIUM_VNC_BIND=0.0.0.0
+          # only behind your own proxy (and then set VNC_PUBLIC_URL in .env).
+          - "${SELENIUM_VNC_BIND:-127.0.0.1}:${SELENIUM_VNC_PORT:-17900}:7900"
           #- "5900:5900"
         environment:
           - SE_NODE_MAX_SESSIONS=1
           - SE_NODE_SESSION_TIMEOUT=600
           - SE_LOG_LEVEL=WARN
+          # Same value the app puts in the viewer URL (SELENIUM_VNC_PASSWORD in .env).
+          - SE_VNC_PASSWORD=${SELENIUM_VNC_PASSWORD:-secret}
           # Browser timezone. MyColleges' date limits are midnight Eastern; on UTC the
           # datepicker rejects a course's first date. Recreate the container after
           # changing it: docker compose -p cpcc_task_automation up -d --force-recreate selenium-chrome

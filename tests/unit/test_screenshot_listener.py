@@ -105,7 +105,8 @@ class TestScreenshotListenerEvents:
         
         listener.on_exception(exception, mock_driver)
         
-        mock_take_screenshot.assert_called_once_with(mock_driver)
+        # Forced: a failure is worth a picture even when only tab changes are captured.
+        mock_take_screenshot.assert_called_once_with(mock_driver, force=True)
 
 
 @pytest.mark.unit
@@ -266,3 +267,151 @@ class TestScreenshotListenerThrottle:
         listener.after_click(MagicMock(), driver)
         listener.after_click(MagicMock(), driver)
         assert holder.call_count == 2
+
+
+@pytest.mark.unit
+class TestPauseGate:
+    """Every browser command waits at the gate while the page has the run paused."""
+
+    HOOKS = [
+        ("before_navigate_to", ("http://example.com",)),
+        ("before_navigate_back", ()),
+        ("before_navigate_forward", ()),
+        ("before_find", ("xpath", "//a")),
+        ("before_click", (MagicMock(),)),
+        ("before_change_value_of", (MagicMock(),)),
+        ("before_execute_script", ("return 1",)),
+    ]
+
+    @pytest.mark.parametrize("hook, args", HOOKS)
+    def test_each_before_hook_waits_at_the_gate(self, hook, args):
+        gate = MagicMock()
+        listener = ScreenshotListener(MagicMock(), pause_gate=gate)
+        driver = MagicMock()
+
+        getattr(listener, hook)(*args, driver)
+
+        gate.wait_if_paused.assert_called_once_with()
+
+    @pytest.mark.parametrize("hook, args", HOOKS)
+    def test_hooks_do_nothing_without_a_gate(self, hook, args):
+        listener = ScreenshotListener(MagicMock())
+
+        getattr(listener, hook)(*args, MagicMock())  # no error
+
+    def test_a_blocked_gate_holds_the_command_and_a_raise_propagates(self):
+        class Stop(BaseException):
+            pass
+
+        gate = MagicMock()
+        gate.wait_if_paused.side_effect = Stop()
+        listener = ScreenshotListener(MagicMock(), pause_gate=gate)
+
+        with pytest.raises(Stop):
+            listener.before_click(MagicMock(), MagicMock())
+
+    def test_real_gate_blocks_before_click_until_resume(self):
+        import threading
+        import time
+
+        from cqc_cpcc.pause_gate import PauseGate
+
+        gate = PauseGate(poll_interval=0.001)
+        gate.pause()
+        listener = ScreenshotListener(MagicMock(), pause_gate=gate)
+        done = threading.Event()
+        threading.Thread(target=lambda: (listener.before_click(MagicMock(), MagicMock()), done.set()),
+                         daemon=True).start()
+
+        time.sleep(0.05)
+        assert not done.is_set()
+        gate.resume()
+        assert done.wait(2)
+
+
+@pytest.mark.unit
+class TestTabChangeOnly:
+    """With the live viewer showing, a screenshot is taken only when the tabs change."""
+
+    @staticmethod
+    def _driver(current, handles):
+        driver = MagicMock()
+        driver.current_window_handle = current
+        driver.window_handles = handles
+        driver.get_screenshot_as_base64.return_value = "png"
+        return driver
+
+    @patch('cqc_cpcc.screenshot_listener.WebDriverWait')
+    def test_first_look_and_each_tab_change_take_a_screenshot(self, _wait):
+        holder = MagicMock()
+        listener = ScreenshotListener(holder, tab_change_only=True)
+        driver = self._driver("a", ["a"])
+
+        listener.take_screenshot(driver)          # first look: a new tab set
+        listener.take_screenshot(driver)          # nothing changed
+        listener.take_screenshot(driver)
+        assert holder.call_count == 1
+
+        driver.window_handles = ["a", "b"]        # a tab opened
+        listener.take_screenshot(driver)
+        assert holder.call_count == 2
+
+        driver.current_window_handle = "b"        # the run moved to it
+        listener.take_screenshot(driver)
+        assert holder.call_count == 3
+
+        listener.take_screenshot(driver)
+        assert holder.call_count == 3
+
+    @patch('cqc_cpcc.screenshot_listener.WebDriverWait')
+    def test_force_takes_a_screenshot_even_when_nothing_changed(self, _wait):
+        holder = MagicMock()
+        listener = ScreenshotListener(holder, tab_change_only=True)
+        driver = self._driver("a", ["a"])
+        listener.take_screenshot(driver)
+
+        listener.take_screenshot(driver, force=True)
+
+        assert holder.call_count == 2
+
+    @patch('cqc_cpcc.screenshot_listener.WebDriverWait')
+    def test_the_mode_can_be_switched_on_and_off_while_running(self, _wait):
+        holder = MagicMock()
+        narrow = {"on": False}
+        listener = ScreenshotListener(holder, tab_change_only=lambda: narrow["on"])
+        driver = self._driver("a", ["a"])
+
+        listener.take_screenshot(driver)
+        listener.take_screenshot(driver)
+        assert holder.call_count == 2, "off: every event takes one"
+
+        narrow["on"] = True
+        listener.take_screenshot(driver)   # first look at the tab set
+        listener.take_screenshot(driver)   # unchanged
+        assert holder.call_count == 3
+
+        narrow["on"] = False
+        listener.take_screenshot(driver)
+        assert holder.call_count == 4, "back to every event"
+
+    @patch('cqc_cpcc.screenshot_listener.WebDriverWait')
+    def test_default_mode_still_takes_every_screenshot(self, _wait):
+        holder = MagicMock()
+        listener = ScreenshotListener(holder)
+        driver = self._driver("a", ["a"])
+
+        listener.take_screenshot(driver)
+        listener.take_screenshot(driver)
+
+        assert holder.call_count == 2
+
+    @patch('cqc_cpcc.screenshot_listener.WebDriverWait')
+    def test_unreadable_tabs_take_no_screenshot_and_no_error(self, _wait):
+        holder = MagicMock()
+        listener = ScreenshotListener(holder, tab_change_only=True)
+        driver = MagicMock()
+        type(driver).current_window_handle = property(lambda self: (_ for _ in ()).throw(RuntimeError("closed")))
+
+        listener.take_screenshot(driver)
+
+        holder.assert_not_called()
