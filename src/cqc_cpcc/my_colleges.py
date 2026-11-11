@@ -1080,24 +1080,16 @@ class MyColleges:
         ]
 
     @staticmethod
-    def _match_student_id(full_name: str, roster: list[dict]) -> str | None:
-        """The roster id whose row holds every word of ``full_name`` as a whole word, if unique.
+    def _match_student_id(student_id: str, roster: list[dict]) -> str | None:
+        """The roster id for an Org Defined ID from the BrightSpace classlist, or None.
 
-        Whole words only: a substring hit ("Lee" inside "Leeson", "Ann" inside "Joanne") must never pick
-        a student, or an absent student's activity would be marked on a different one. A hyphenated name
-        stays one word ("Anne-Marie"), so "Anne Smith" never matches "Smith-Jones, Anne-Marie". Punctuation
-        such as the comma in "Last, First" is ignored. A name needs at least two words of two or more
-        letters (a lone initial or a one-word name cannot identify a student), and anything still
-        ambiguous is left unmatched rather than marking the wrong student.
+        Ids only, never names: BrightSpace attendance is tied to students by the classlist (exact user id),
+        so the MyColleges row is found by the same Org Defined ID. A student not on the roster is unmatched.
         """
-        def words(text: str) -> list[str]:
-            return re.findall(r"[\w'\-]+", (text or "").lower().replace("\u2019", "'"))
-
-        parts = set(words(full_name))
-        if sum(len(part) >= 2 for part in parts) < 2:
+        wanted = str(student_id or "").strip()
+        if not re.fullmatch(r"\d{5,12}", wanted):
             return None
-        ids = {row["id"] for row in roster if parts <= set(words(row["text"]))}
-        return ids.pop() if len(ids) == 1 else None
+        return wanted if any(row["id"] == wanted for row in roster) else None
 
     def _student_selects(self, student_id: str) -> list:
         return self.driver.find_elements(By.XPATH, self._STUDENT_SELECTS_XPATH % student_id)
@@ -1122,8 +1114,7 @@ class MyColleges:
         try:
             selects = self._student_selects(student_id)
             if not selects:
-                logger.error("No attendance row found for student id ending %s",
-                             student_id[-3:])
+                logger.error("No attendance row found for %s", alias(student_id))
                 return False
 
             for index in range(len(selects)):
@@ -1150,8 +1141,7 @@ class MyColleges:
                 logger.debug("Unable to blur the attendance select.", exc_info=True)
 
             if not self._wait_for_row_save(student_id):
-                logger.warning("Row save spinner did not clear for student id ending %s",
-                               student_id[-3:])
+                logger.warning("Row save spinner did not clear for %s", alias(student_id))
                 return False
 
             return self._read_present_by_id(student_id) is True

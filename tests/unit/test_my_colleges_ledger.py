@@ -121,57 +121,24 @@ def _my_colleges(page, ledger, totals=None):
 
 @pytest.mark.unit
 class TestMatchStudentId:
-    def test_unique_match(self):
-        assert MyColleges._match_student_id("Ann Adams", ROSTER) == "1000001"
+    """The roster is matched by Org Defined ID only; a name never picks a student."""
 
-    def test_no_match(self):
-        assert MyColleges._match_student_id("Zed Zulu", ROSTER) is None
+    def test_an_id_on_the_roster_matches(self):
+        assert MyColleges._match_student_id("1000001", ROSTER) == "1000001"
+        assert MyColleges._match_student_id(" 1000002 ", ROSTER) == "1000002"
 
-    def test_substring_ambiguity_is_broken_by_whole_words(self):
-        roster = [{"id": "1", "text": "Lee, Ann 1"}, {"id": "2", "text": "Leeson, Ann 2"}]
-        assert MyColleges._match_student_id("Ann Lee", roster) == "1"
+    def test_an_id_not_on_the_roster_is_unmatched(self):
+        assert MyColleges._match_student_id("9999999", ROSTER) is None
 
-    def test_a_substring_of_another_students_row_never_matches(self):
-        # An absent student must not be marked on someone whose words merely contain theirs.
-        roster = [{"id": "2", "text": "Leeson, Joanne 2"}]
-        assert MyColleges._match_student_id("Lee, Ann", roster) is None
-        assert MyColleges._match_student_id("Ann Lee", roster) is None
+    def test_a_name_never_matches_even_when_its_words_are_on_the_roster(self):
+        assert MyColleges._match_student_id("Ann Adams", ROSTER) is None
+        assert MyColleges._match_student_id("Adams, Ann", ROSTER) is None
 
-    def test_the_right_row_wins_over_a_longer_surname_row(self):
-        roster = [{"id": "2", "text": "Leeson, Joanne 2"}, {"id": "1", "text": "Lee, Ann M. 1000001"}]
-        assert MyColleges._match_student_id("Lee, Ann", roster) == "1"
-
-    def test_a_one_word_name_cannot_identify_a_student(self):
-        assert MyColleges._match_student_id("Adams", ROSTER) is None
-        assert MyColleges._match_student_id("Ann, ", ROSTER) is None
-
-    def test_a_hyphenated_name_is_one_word_and_never_matches_a_part_of_it(self):
-        roster = [{"id": "1", "text": "Smith-Jones, Anne-Marie 1000001"}]
-        assert MyColleges._match_student_id("Anne-Marie Smith-Jones", roster) == "1"
-        assert MyColleges._match_student_id("Smith-Jones, Anne-Marie", roster) == "1"
-        # A different student whose words are parts of the hyphenated ones must not match.
-        assert MyColleges._match_student_id("Anne Smith", roster) is None
-        assert MyColleges._match_student_id("Marie Jones", roster) is None
-
-    def test_a_lone_initial_is_not_enough_to_match(self):
-        roster = [{"id": "1", "text": "Smith, Jane J. 123"}]
-        assert MyColleges._match_student_id("J Smith", roster) is None
-        assert MyColleges._match_student_id("Jane Smith", roster) == "1"
-
-    def test_a_curly_apostrophe_matches_a_straight_one(self):
-        roster = [{"id": "1", "text": "O'Brien, Pat 1000001"}]
-        assert MyColleges._match_student_id("Pat O\u2019Brien", roster) == "1"
-
-    def test_a_last_comma_first_name_matches_its_roster_row(self):
-        roster = [{"id": "1", "text": "Lee, Ann M. 1000001 Ann Lee"}, {"id": "2", "text": "Leeson, Ann 2"}]
-        assert MyColleges._match_student_id("Lee, Ann", roster) == "1"
-
-    def test_a_name_that_is_only_punctuation_matches_nothing(self):
-        assert MyColleges._match_student_id(" , ", ROSTER) is None
-
-    def test_true_ambiguity_is_left_unmatched(self):
-        roster = [{"id": "1", "text": "Lee, Ann 1"}, {"id": "2", "text": "Lee, Ann 2"}]
-        assert MyColleges._match_student_id("Ann Lee", roster) is None
+    def test_only_a_whole_id_matches_never_a_part_of_one(self):
+        assert MyColleges._match_student_id("10000", ROSTER) is None
+        assert MyColleges._match_student_id("100000100", ROSTER) is None
+        assert MyColleges._match_student_id("", ROSTER) is None
+        assert MyColleges._match_student_id(None, ROSTER) is None
 
 
 @pytest.mark.unit
@@ -186,7 +153,7 @@ class TestMarkAttendanceForCourse:
         page = FakeAttendancePage()
         mc = _my_colleges(page, ledger)
         outcome = self._run(mc, ledger, {
-            "08-19-2026": ["Ann Adams", "Bob Brown"], "08-20-2026": ["Cid Clark"],
+            "08-19-2026": ["1000001", "1000002"], "08-20-2026": ["1000003"],
         })
         assert (outcome.expected, outcome.verified, outcome.failed) == (3, 3, 0)
         assert ledger.outstanding(TERM, SECTION) == []
@@ -194,7 +161,7 @@ class TestMarkAttendanceForCourse:
     def test_bounded_range_leaves_outside_records_and_ledger_debt_untouched(self, ledger):
         old_day, selected_day = DT.date(2026, 10, 19), DT.date(2026, 10, 25)
         ledger.upsert_expected(TERM, SECTION, "1000001", old_day)
-        course = _course({"10-19-2026": ["Ann Adams"], "10-25-2026": ["Bob Brown"]},
+        course = _course({"10-19-2026": ["1000001"], "10-25-2026": ["1000002"]},
                          window_end=DT.date(2026, 10, 27))
         course.attendance_start_bound = DT.date(2026, 10, 20)
         page = FakeAttendancePage()
@@ -210,7 +177,7 @@ class TestMarkAttendanceForCourse:
 
     def test_bounded_range_does_not_carry_unselectable_date_past_its_end(self, ledger):
         day, outside_day = DT.date(2026, 10, 25), DT.date(2026, 10, 26)
-        course = _course({"10-25-2026": ["Ann Adams"]}, window_end=day)
+        course = _course({"10-25-2026": ["1000001"]}, window_end=day)
         course.attendance_start_bound = DT.date(2026, 10, 20)
         page = FakeAttendancePage(unselectable={day})
         mc = _my_colleges(page, ledger)
@@ -226,7 +193,7 @@ class TestMarkAttendanceForCourse:
 
     def test_automatic_run_does_not_carry_attendance_past_course_collection_end(self, ledger):
         day, outside_day = DT.date(2026, 10, 25), DT.date(2026, 10, 26)
-        course = _course({"10-25-2026": ["Ann Adams"]}, window_end=day)
+        course = _course({"10-25-2026": ["1000001"]}, window_end=day)
         page = FakeAttendancePage(unselectable={day})
         mc = _my_colleges(page, ledger)
 
@@ -258,10 +225,10 @@ class TestMarkAttendanceForCourse:
     def test_complete_eva_batch_is_exact_date_and_unmatched_scan_writes_no_eva(self, ledger):
         page = FakeAttendancePage()
         mc = _my_colleges(page, ledger)
-        course = _course({"08-20-2026": ["Ann Adams"]})
+        course = _course({"08-20-2026": ["1000001"]})
         course.eva_activity_id = "eva-1"
         course.eva_collection_result = EVACompletionResult(
-            "complete", {"08-19-2026": ["Ann Adams"]}, pages_read=2, rows_read=1,
+            "complete", {"08-19-2026": ["1000001"]}, pages_read=2, rows_read=1,
         )
         course.eva_attendance_records = course.eva_collection_result.records
         outcome = mc._mark_attendance_for_course(
@@ -272,10 +239,10 @@ class TestMarkAttendanceForCourse:
         assert exact.exact_date is True
         assert outcome.eva_unmatched == 0
 
-        unmatched = _course({"08-21-2026": ["Bob Brown"]})
+        unmatched = _course({"08-21-2026": ["1000002"]})
         unmatched.eva_activity_id = "eva-1"
         unmatched.eva_collection_result = EVACompletionResult(
-            "complete", {"08-18-2026": ["Ann Adams", "No Match"]}, pages_read=1, rows_read=2,
+            "complete", {"08-18-2026": ["1000001", "9999999"]}, pages_read=1, rows_read=2,
         )
         unmatched.eva_attendance_records = unmatched.eva_collection_result.records
         outcome = mc._mark_attendance_for_course(
@@ -290,13 +257,13 @@ class TestMarkAttendanceForCourse:
     def test_incomplete_eva_is_ignored_while_regular_attendance_continues(self, ledger):
         page = FakeAttendancePage()
         mc = _my_colleges(page, ledger)
-        course = _course({"08-20-2026": ["Ann Adams"]})
+        course = _course({"08-20-2026": ["1000001"]})
         course.eva_activity_id = "eva-1"
         course.eva_collection_result = EVACompletionResult(
             "incomplete", {}, pages_read=1, rows_read=2, error_code="pagination_transition_unverified",
         )
         # Guard against a future reader accidentally exposing staged partial rows.
-        course.eva_attendance_records = {"08-19-2026": ["Bob Brown"]}
+        course.eva_attendance_records = {"08-19-2026": ["1000002"]}
         outcome = mc._mark_attendance_for_course(
             _context(), course, ledger=ledger, term=TERM, section=SECTION, write=True,
         )
@@ -312,7 +279,7 @@ class TestMarkAttendanceForCourse:
         course = _course({})
         course.eva_activity_id = "eva-1"
         course.eva_collection_result = EVACompletionResult(
-            "complete", {"08-19-2026": ["Ann Adams"]}, pages_read=1, rows_read=1,
+            "complete", {"08-19-2026": ["1000001"]}, pages_read=1, rows_read=1,
         )
         course.eva_attendance_records = course.eva_collection_result.records
         ledger.record_eva_expected_batch = MagicMock(side_effect=OSError("disk full"))
@@ -328,7 +295,7 @@ class TestMarkAttendanceForCourse:
         course = _course({})
         course.eva_activity_id = None
         course.eva_collection_result = EVACompletionResult(
-            "complete", {"08-19-2026": ["Ann Adams"]}, pages_read=1, rows_read=1,
+            "complete", {"08-19-2026": ["1000001"]}, pages_read=1, rows_read=1,
         )
         course.eva_attendance_records = course.eva_collection_result.records
 
@@ -344,7 +311,7 @@ class TestMarkAttendanceForCourse:
         """The census bug: the page showed Present, MyColleges never kept it."""
         page = FakeAttendancePage(drops={(DT.date(2026, 8, 19), "1000002")})
         mc = _my_colleges(page, ledger)
-        outcome = self._run(mc, ledger, {"08-19-2026": ["Ann Adams", "Bob Brown"]})
+        outcome = self._run(mc, ledger, {"08-19-2026": ["1000001", "1000002"]})
         assert outcome.failed == 1
         assert ledger.get_status(TERM, SECTION, "1000002", "2026-08-19") == STATUS_FAILED
 
@@ -353,7 +320,7 @@ class TestMarkAttendanceForCourse:
         page = FakeAttendancePage()
         mc = _my_colleges(page, ledger)
         # This run's BrightSpace window no longer contains 08-19 at all.
-        self._run(mc, ledger, {"08-29-2026": ["Ann Adams"]})
+        self._run(mc, ledger, {"08-29-2026": ["1000001"]})
         assert (DT.date(2026, 8, 19), "1000003") in page.writes
         assert ledger.get_status(TERM, SECTION, "1000003", "2026-08-19") == STATUS_VERIFIED
 
@@ -361,34 +328,42 @@ class TestMarkAttendanceForCourse:
         ledger.set_status(TERM, SECTION, "1000001", DT.date(2026, 8, 19), STATUS_VERIFIED)
         page = FakeAttendancePage()
         mc = _my_colleges(page, ledger)
-        self._run(mc, ledger, {"08-19-2026": ["Ann Adams"]})
+        self._run(mc, ledger, {"08-19-2026": ["1000001"]})
         assert page.writes == []
 
     def test_dates_are_written_oldest_first(self, ledger):
         page = FakeAttendancePage()
         mc = _my_colleges(page, ledger)
-        self._run(mc, ledger, {"08-21-2026": ["Ann Adams"], "08-19-2026": ["Bob Brown"]})
+        self._run(mc, ledger, {"08-21-2026": ["1000001"], "08-19-2026": ["1000002"]})
         assert [d for d, _ in page.writes] == [DT.date(2026, 8, 19), DT.date(2026, 8, 21)]
 
-    def test_unmatched_names_are_reported_not_written(self, ledger):
+    def test_unmatched_entries_are_reported_not_written(self, ledger, caplog):
         page = FakeAttendancePage()
         mc = _my_colleges(page, ledger)
-        outcome = self._run(mc, ledger, {"08-19-2026": ["Zed Zulu"]})
+        with caplog.at_level("INFO"):
+            outcome = self._run(mc, ledger, {"08-19-2026": ["9999999"]})
         assert len(outcome.unmatched) == 1
-        assert "Zulu" not in str(outcome.unmatched)  # aliased, never the raw name
+        assert "9999999" not in str(outcome.unmatched)  # an app alias, never the id
+        assert "9999999" not in caplog.text
         assert page.writes == []
+
+    def test_a_name_in_the_records_is_never_matched_to_a_roster_row(self, ledger):
+        page = FakeAttendancePage()
+        mc = _my_colleges(page, ledger)
+        outcome = self._run(mc, ledger, {"08-19-2026": ["Ann Adams"]})  # roster row: "Adams, Ann 1000001"
+        assert len(outcome.unmatched) == 1 and page.writes == []
 
     def test_unselectable_date_carries_to_next_day(self, ledger):
         page = FakeAttendancePage(unselectable={DT.date(2026, 8, 22)})
         mc = _my_colleges(page, ledger)
-        self._run(mc, ledger, {"08-22-2026": ["Ann Adams"]})
+        self._run(mc, ledger, {"08-22-2026": ["1000001"]})
         assert ledger.get_status(TERM, SECTION, "1000001", "2026-08-22") == STATUS_CARRIED
         assert ledger.get_status(TERM, SECTION, "1000001", "2026-08-23") == STATUS_VERIFIED
 
     def test_dry_run_writes_nothing_and_reports_missing(self, ledger):
         page = FakeAttendancePage(already={(DT.date(2026, 8, 19), "1000001")})
         mc = _my_colleges(page, ledger)
-        outcome = self._run(mc, ledger, {"08-19-2026": ["Ann Adams", "Bob Brown"]},
+        outcome = self._run(mc, ledger, {"08-19-2026": ["1000001", "1000002"]},
                             write=False)
         assert page.writes == []
         assert outcome.missing == [(DT.date(2026, 8, 19), "1000002")]
@@ -399,7 +374,7 @@ class TestMarkAttendanceForCourse:
 
 @pytest.mark.unit
 class TestRecordCourseAttendance:
-    RECORDS = {"08-19-2026": ["Ann Adams"], "08-20-2026": ["Ann Adams", "Bob Brown"]}
+    RECORDS = {"08-19-2026": ["1000001"], "08-20-2026": ["1000001", "1000002"]}
 
     def _record(self, mc, ledger, course, plan=None):
         plan = plan or RunPlan()
@@ -550,7 +525,7 @@ class TestMyCollegesRefusesUpdates:
         page = FakeAttendancePage(refused={(day, "1000001")})
         mc = _my_colleges(page, ledger)
         with patch("cqc_cpcc.my_colleges.notify_warning") as warn:
-            outcome = self._run(mc, ledger, {"08-19-2026": ["Ann Adams", "Bob Brown"]})
+            outcome = self._run(mc, ledger, {"08-19-2026": ["1000001", "1000002"]})
         assert (outcome.update_errors, outcome.updates_down) == (1, False)
         assert ledger.get_status(TERM, SECTION, "1000001", "2026-08-19") == STATUS_FAILED
         assert ledger.get_status(TERM, SECTION, "1000002", "2026-08-19") == STATUS_VERIFIED
@@ -563,8 +538,8 @@ class TestMyCollegesRefusesUpdates:
         mc = _my_colleges(page, ledger)
         with patch("cqc_cpcc.my_colleges.notify_warning") as warn:
             outcome = self._run(mc, ledger, {
-                "08-19-2026": ["Ann Adams", "Bob Brown", "Cid Clark"],
-                "08-20-2026": ["Ann Adams"],
+                "08-19-2026": ["1000001", "1000002", "1000003"],
+                "08-20-2026": ["1000001"],
             })
         assert outcome.updates_down is True
         # Nobody after the second refusal is touched, on any date.
@@ -581,7 +556,7 @@ class TestMyCollegesRefusesUpdates:
         plan = RunPlan(write_attendance=True)
         with patch("cqc_cpcc.my_colleges.notify_warning"):
             mc._record_course_attendance(
-                _context(), _course({"08-19-2026": ["Ann Adams", "Bob Brown"]}), plan,
+                _context(), _course({"08-19-2026": ["1000001", "1000002"]}), plan,
                 ledger, TERM, SECTION, DT.date(2026, 8, 17),
             )
         assert ledger.course_states()[0]["last_run_status"] == RUN_INCOMPLETE
@@ -600,3 +575,28 @@ class TestMyCollegesRefusesUpdates:
             mc = MyColleges(MagicMock(), MagicMock())
         mc.driver.execute_script.side_effect = RuntimeError("gone")
         assert mc._update_error_shown() is False
+
+
+@pytest.mark.unit
+class TestLogLinesCarryAliasesNotIds:
+    def _mc(self):
+        mc = MyColleges.__new__(MyColleges)
+        mc.driver = MagicMock()
+        return mc
+
+    def test_a_missing_attendance_row_is_logged_by_alias(self, caplog):
+        mc = self._mc()
+        mc._student_selects = lambda _student_id: []
+        with caplog.at_level("ERROR"):
+            assert mc._mark_present_by_id("1000001") is False
+        assert "1000001" not in caplog.text and "student_" in caplog.text
+
+    def test_a_row_save_that_never_finishes_is_logged_by_alias(self, caplog):
+        mc = self._mc()
+        select = MagicMock()
+        select.get_attribute.return_value = "P"
+        mc._student_selects = lambda _student_id: [select]
+        mc._wait_for_row_save = lambda _student_id: False
+        with caplog.at_level("WARNING"), patch("cqc_cpcc.my_colleges.wait_for_ajax"):
+            assert mc._mark_present_by_id("1000001") is False
+        assert "1000001" not in caplog.text and "student_" in caplog.text

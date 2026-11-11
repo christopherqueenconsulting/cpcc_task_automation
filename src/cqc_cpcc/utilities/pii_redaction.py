@@ -171,14 +171,19 @@ def register_student(
         *,
         student_id: Any = None,
         email: str | None = None,
+        tokens: Iterable[Any] = (),
+        alias_key: Any = None,
 ) -> str:
     """Teach the redactor a student's identifiers. Returns the student's alias.
 
     Call this wherever a roster, withdrawal record, submission folder or learner
-    list is read, before anything about that student is logged.
+    list is read, before anything about that student is logged. ``alias_key`` (for
+    example the Org Defined ID) makes the alias depend on that value instead of the
+    name, so a changed spelling cannot change it; ``tokens`` are further exact ids
+    (such as a BrightSpace user id) to scrub.
     """
     global _names_re
-    canonical = name or email or student_id
+    canonical = alias_key or name or email or student_id
     student_alias = alias(canonical)
 
     with _lock:
@@ -195,7 +200,7 @@ def register_student(
                     changed = True
             if changed:
                 _names_re = None
-        for token in (student_id, email):
+        for token in (student_id, email, *tokens):
             if token is not None and len(str(token).strip()) >= 3:
                 _known_tokens[str(token).strip().lower()] = student_alias
     return student_alias

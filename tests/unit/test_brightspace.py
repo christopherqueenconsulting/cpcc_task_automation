@@ -50,9 +50,29 @@ def test_attendance_window_uses_eastern_day_and_defaults_to_course_start():
     assert course.collection_date == course.date_range_end == DT.date(2026, 10, 27)
 
 
+def _classlist(*names):
+    """A session classlist of synthetic learners: Student One -> 1000001, Two -> 1000002, Three -> 1000003."""
+    from cqc_cpcc.student_identity import build_classlist
+
+    people = {"Student One": ("101", "1000001"), "Student Two": ("102", "1000002"),
+              "Student Three": ("103", "1000003")}
+    chosen = names or tuple(people)
+    return build_classlist([{"user": people[n][0], "org": people[n][1], "name": n.replace("Student ", "Student, ")}
+                            for n in chosen])
+
+
+@pytest.fixture(autouse=True)
+def _clear_pii_registry():
+    yield
+    from cqc_cpcc.utilities.pii_redaction import clear_registry
+
+    clear_registry()
+
+
 @pytest.fixture
 def ordinary_completion_course(monkeypatch):
     course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.classlist = _classlist()
     course.driver = MagicMock()
     course.driver.current_window_handle = "course"
     course.driver.window_handles = ["course"]
@@ -124,7 +144,7 @@ def test_ordinary_completion_collects_all_pages_and_keeps_actual_completion_date
               else course.get_attendance_from_brightspace_quizzes_urls)
     method(["https://example.invalid/activity"])
     assert course.attendance_records == {
-        "10-19-2026": ["Student One"], "10-27-2026": ["Student Two", "Student One"],
+        "10-19-2026": ["1000001"], "10-27-2026": ["1000002", "1000001"],
     }
     assert course.scrape_problems == []
     assert course._snapshot_activity_page.call_count == 2
@@ -157,7 +177,7 @@ def test_ordinary_completion_enforces_course_bounds_but_keeps_prior_lookback_act
     ], 1))
     course._collect_ordinary_activity_completions(["https://example.invalid/activity"], activity_type)
     assert course.attendance_records == {
-        "08-17-2026": ["Student One"], "10-19-2026": ["Student One"], "10-26-2026": ["Student One"],
+        "08-17-2026": ["1000001"], "10-19-2026": ["1000001"], "10-26-2026": ["1000001"],
     }
     assert course.scrape_problems == []
 
@@ -167,12 +187,12 @@ def test_ordinary_completion_enforces_course_bounds_but_keeps_prior_lookback_act
 def test_ordinary_completion_future_date_discards_activity_batch_without_removing_other_evidence(
         ordinary_completion_course, activity_type):
     course = ordinary_completion_course
-    course.attendance_records = {"10-19-2026": ["Student One"]}
+    course.attendance_records = {"10-19-2026": ["1000001"]}
     course._read_activity_rows = MagicMock(return_value=([
         ("Student Two", "10/26/2026"), ("Student Three", "10/28/2026"),
     ], 1))
     course._collect_ordinary_activity_completions(["https://example.invalid/activity"], activity_type)
-    assert course.attendance_records == {"10-19-2026": ["Student One"]}
+    assert course.attendance_records == {"10-19-2026": ["1000001"]}
     assert "future_completion_date" in course.scrape_problems[0]
 
 
@@ -552,6 +572,7 @@ def test_eva_quiz_reader_falls_back_from_attempt_logs_to_attempts(monkeypatch):
     driver = Driver()
     course = BrightSpace_Course.__new__(BrightSpace_Course)
     course.driver = driver
+    course.classlist = _classlist()
     course.wait = MagicMock()
     course.select_xpath = "//select"
     course.eva_date = DT.date(2026, 1, 31)
@@ -572,7 +593,7 @@ def test_eva_quiz_reader_falls_back_from_attempt_logs_to_attempts(monkeypatch):
     }, now=DT.datetime(2026, 1, 20, tzinfo=DT.timezone.utc))
 
     assert result.complete
-    assert result.records == {"01-10-2026": ["Student One"]}
+    assert result.records == {"01-10-2026": ["1000001"]}
     assert len(driver.urls) == 2
     assert driver.urls[1].endswith("?d2l_isfromtab=1&qi=222&ou=111")
 
@@ -1455,6 +1476,7 @@ def test_eva_completion_returns_all_valid_distinct_days(activity_type, monkeypat
     from zoneinfo import ZoneInfo
 
     course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.classlist = _classlist()
     course.driver = MagicMock()
     course.driver.current_window_handle = "main"
     course.wait = MagicMock()
@@ -1478,7 +1500,7 @@ def test_eva_completion_returns_all_valid_distinct_days(activity_type, monkeypat
     )
     assert result.status == "complete"
     assert result.records == {
-        "10-30-2026": ["Student One"], "10-31-2026": ["Student One"],
+        "10-30-2026": ["1000001"], "10-31-2026": ["1000001"],
     }
     assert result.pages_read == 2
     assert result.rows_read == 3
@@ -1626,6 +1648,31 @@ def test_recoverable_eva_error_keeps_regular_records_and_dead_session_raises():
         with pytest.raises(TimeoutException):
             BrightSpace_Course(*args, eva_date=DT.date(2026, 8, 20),
                                eva_activity={"activity_id": "eva-1"})
+
+@pytest.mark.unit
+def test_the_classlist_is_read_before_activity_and_dropped_when_collection_ends():
+    args = (
+        "CSC-134-N851: C++ Programming", "Fall", "2026",
+        DT.datetime(2026, 8, 1), DT.datetime(2026, 8, 31),
+        DT.datetime(2026, 8, 1), DT.datetime(2026, 12, 1), MagicMock(), MagicMock(),
+    )
+    seen = {}
+    built = _classlist()
+
+    def collect(self):
+        seen["classlist_during_collection"] = len(self.classlist)
+
+    with patch("cqc_cpcc.brightspace.get_driver_wait", return_value=MagicMock()), \
+            patch.object(BrightSpace_Course, "open_course_tab", return_value=True), \
+            patch.object(BrightSpace_Course, "close_course_tab"), \
+            patch.object(BrightSpace_Course, "_read_classlist", return_value=built), \
+            patch.object(BrightSpace_Course, "get_attendance_from_assignments", autospec=True, side_effect=collect), \
+            patch.object(BrightSpace_Course, "get_attendance_from_quizzes"):
+        course = BrightSpace_Course(*args)
+
+    assert seen == {"classlist_during_collection": 3}
+    assert len(course.classlist) == 0  # the name/id table does not outlive collection
+
 
 @pytest.mark.unit
 class TestWithdrawalCollectionGate:
@@ -2017,3 +2064,233 @@ def test_next_control_xpath_matches_any_casing_of_the_label(label):
                            f'<button aria-label="Previous page">&lt;</button></div>')
     # lxml has no namespace here; the XPath is plain XPath 1.0.
     assert len(page.xpath(BrightSpace_Course.EVA_NEXT_XPATH.replace("//", "descendant-or-self::"))) == 2
+
+
+# ---- classlist identity: exact join by BrightSpace user id (2026-11-11) ---------------------------------
+
+def _classlist_course(monkeypatch, data, page_size=200, size_verified=True):
+    """A course whose classlist page returns ``data`` from the table script."""
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.name = "CSC-134-N801: C++ Programming"
+    course.url = "https://d2l.example/d2l/home/111"
+    course.scrape_problems = []
+    course.select_xpath = "//select"
+    course.wait = MagicMock()
+    driver = MagicMock()
+    driver.window_handles = ["course"]
+    driver.current_window_handle = "course"
+
+    def open_tab(_kind):
+        driver.window_handles.append("tab")
+        driver.current_window_handle = "tab"
+
+    def switch(handle):
+        driver.current_window_handle = handle
+
+    def close(_driver):
+        driver.window_handles.remove("tab")
+        driver.current_window_handle = "course"
+
+    driver.switch_to.new_window.side_effect = open_tab
+    driver.switch_to.window.side_effect = switch
+    driver.execute_script.return_value = data
+    course.driver = driver
+
+    def click_max(_xpath):
+        course.results_page_size = page_size if size_verified else None
+        return True
+
+    course.click_max_results_select = click_max
+    course._visible_pager_hint = lambda: False
+    course._page_text_shows_more = lambda: False
+    monkeypatch.setattr("cqc_cpcc.brightspace.wait_for_ajax", lambda *_a: None)
+    monkeypatch.setattr("cqc_cpcc.brightspace.close_tab", close)
+    monkeypatch.setattr("cqc_cpcc.brightspace.time.sleep", lambda *_a: None)
+    return course
+
+
+def _classlist_data(*rows):
+    return {"headers": ["", "Image", "Name", "Org Defined ID", "Role"], "nameAt": 2, "orgAt": 3, "rows": list(rows)}
+
+
+def _row(user, org, name, role="Learner", mail=None):
+    return {"user": user, "mail": user if mail is None else mail, "name": name, "org": org, "role": role}
+
+
+@pytest.mark.unit
+def test_the_classlist_is_read_into_a_session_table_and_the_tab_is_closed(monkeypatch):
+    course = _classlist_course(monkeypatch, _classlist_data(
+        _row("101", "1000001", "Adams, Ann\nextra line"), _row("102", "1000002", "Brown, Bob"),
+        _row("900", "", "Teacher, Terry", role="Primary Instructor")))
+    classlist = course._read_classlist()
+
+    assert len(classlist) == 2 and course.scrape_problems == []
+    assert classlist.resolve("Ann Adams", "101") == "1000001"
+    assert course.driver.window_handles == ["course"] and course.driver.current_window_handle == "course"
+    called_url = course.driver.get.call_args.args[0]
+    assert called_url == "https://d2l.example/d2l/lms/classlist/classlist.d2l?ou=111"
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("data,code", [
+    (None, "classlist_table_missing"),
+    ({"headers": [], "nameAt": -1, "orgAt": 3, "rows": [_row("101", "1000001", "Adams, Ann")]},
+     "classlist_columns_missing"),
+    (_classlist_data(_row("101", "1000001", "Adams, Ann"), _row("", "1000002", "Brown, Bob")),
+     "classlist_rows_unreadable"),
+    (_classlist_data(_row("101", "1000001", "Adams, Ann"), _row("102", "", "Brown, Bob")),
+     "classlist_rows_unreadable"),
+    (_classlist_data(_row("101", "1000001", "Adams, Ann", mail="555")), "classlist_rows_unreadable"),
+])
+def test_a_classlist_that_cannot_be_read_completely_is_a_scrape_problem_and_none(monkeypatch, data, code):
+    course = _classlist_course(monkeypatch, data)
+    assert course._read_classlist() is None
+    assert len(course.scrape_problems) == 1 and code in course.scrape_problems[0]
+
+
+@pytest.mark.unit
+def test_a_classlist_page_size_that_is_not_verified_is_a_scrape_problem(monkeypatch):
+    course = _classlist_course(monkeypatch, _classlist_data(_row("101", "1000001", "Adams, Ann")),
+                               size_verified=False)
+    assert course._read_classlist() is None
+    assert "classlist_page_size_unverified" in course.scrape_problems[0]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("pager,text_more", [(False, False), (True, False), (False, True)])
+def test_a_full_or_paged_classlist_is_never_trusted(monkeypatch, pager, text_more):
+    rows = [_row(str(100 + i), str(1000000 + i), "Student, N%02d" % i) for i in range(3)]
+    course = _classlist_course(monkeypatch, _classlist_data(*rows), page_size=3 if not (pager or text_more) else 200)
+    course._visible_pager_hint = lambda: pager
+    course._page_text_shows_more = lambda: text_more
+    assert course._read_classlist() is None
+    assert "classlist_may_have_more_pages" in course.scrape_problems[0]
+
+
+@pytest.mark.unit
+def test_a_course_url_without_a_course_id_cannot_read_the_classlist(monkeypatch):
+    course = _classlist_course(monkeypatch, _classlist_data(_row("101", "1000001", "Adams, Ann")))
+    course.url = "https://d2l.example/d2l/home"
+    assert course._read_classlist() is None
+    assert "course id" in course.scrape_problems[0]
+
+
+@pytest.mark.unit
+def test_a_row_user_id_comes_from_its_learner_link_or_quiz_attempt_link():
+    import base64
+
+    def link(**attrs):
+        return MagicMock(get_attribute=lambda name, _a=attrs: _a.get(name))
+
+    token = base64.urlsafe_b64encode(b"tok.user_4242").decode().rstrip("=")
+    learner = MagicMock()
+    learner.find_elements.return_value = [link(onclick="feedback,101,555")]
+    attempt = MagicMock()
+    attempt.find_elements.return_value = [link(href=f"https://d2l.example/x/evaluation/actor/{token}?a=b")]
+    assert BrightSpace_Course._row_user_id(learner) == "101"
+    assert BrightSpace_Course._row_user_id(attempt) == "4242"
+
+
+@pytest.mark.unit
+def test_a_row_with_two_different_user_ids_or_none_has_no_user_id():
+    def link(onclick):
+        return MagicMock(get_attribute=lambda name, _o=onclick: _o if name == "onclick" else None)
+
+    conflicted = MagicMock()
+    conflicted.find_elements.return_value = [link("feedback,101"), link("feedback,102")]
+    empty = MagicMock()
+    empty.find_elements.return_value = []
+    odd = MagicMock()
+    odd.find_elements.return_value = "not a list"
+    assert BrightSpace_Course._row_user_id(conflicted) is None
+    assert BrightSpace_Course._row_user_id(empty) is None
+    assert BrightSpace_Course._row_user_id(odd) is None
+
+
+@pytest.mark.unit
+def test_per_user_rows_carry_the_learners_user_id_into_every_date_row():
+    rows = _live_per_user_rows(("Student One", ["Nov 9, 2026 10:06 PM", "Nov 8, 2026 9:00 AM"]),
+                               ("Student Two", "Aug 20, 2026 11:29 AM"))
+    learner_ids = iter(["101", "102"])
+    for row in rows:
+        if len(row.find_elements(None, "./th")) == 1 and len(row.find_elements(None, "./td")) == 1:
+            row._uid = next(learner_ids)
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.driver = MagicMock()
+    course.driver.find_elements.return_value = [_PerUserTable(rows)]
+    course._row_user_id = lambda row: getattr(row, "_uid", None)
+
+    page = course._snapshot_activity_page("//table", 1, 2, 0, 0)
+
+    assert [(row[0], row.user_id) for row in page] == [
+        ("Student One", "101"), ("Student One", "101"), ("Student Two", "102")]
+
+
+@pytest.mark.unit
+def test_two_learners_with_the_same_name_are_recorded_apart_by_user_id(ordinary_completion_course):
+    from cqc_cpcc.student_identity import ActivityRow, build_classlist
+
+    course = ordinary_completion_course
+    course.classlist = build_classlist([{"user": "201", "org": "2000001", "name": "Lee, Pat"},
+                                        {"user": "202", "org": "2000002", "name": "Lee, Pat"}])
+    course._read_activity_rows = MagicMock(return_value=([
+        ActivityRow("Pat Lee", "10/20/2026", "201"), ActivityRow("Pat Lee", "10/21/2026", "202")], 1))
+    course._collect_ordinary_activity_completions(["https://example.invalid/activity"], "assignment")
+
+    assert course.attendance_records == {"10-20-2026": ["2000001"], "10-21-2026": ["2000002"]}
+    assert course.scrape_problems == []
+
+
+@pytest.mark.unit
+def test_rows_that_cannot_be_tied_to_a_classlist_student_are_never_recorded_and_flag_the_course(
+        ordinary_completion_course):
+    from cqc_cpcc.student_identity import ActivityRow, build_classlist
+
+    course = ordinary_completion_course
+    course.classlist = build_classlist([{"user": "201", "org": "2000001", "name": "Lee, Pat"},
+                                        {"user": "202", "org": "2000002", "name": "Lee, Pat"}])
+    course._read_activity_rows = MagicMock(return_value=([
+        ActivityRow("Pat Lee", "10/20/2026", None),       # shared name, no user id: ambiguous
+        ActivityRow("Pat Lee", "10/21/2026", "999"),      # user id not on the classlist
+        ActivityRow("Pat Lee", "10/22/2026", "201")], 1))  # exact
+    course._collect_ordinary_activity_completions(["https://example.invalid/activity"], "quiz")
+
+    assert course.attendance_records == {"10-22-2026": ["2000001"]}
+    assert len(course.scrape_problems) == 1 and "2 completion row(s)" in course.scrape_problems[0]
+
+
+@pytest.mark.unit
+def test_no_classlist_means_nothing_is_recorded_for_a_name(ordinary_completion_course):
+    course = ordinary_completion_course
+    course.classlist = None
+    course._read_activity_rows = MagicMock(return_value=([("Student One", "10/20/2026")], 1))
+    course._collect_ordinary_activity_completions(["https://example.invalid/activity"], "assignment")
+    assert course.attendance_records == {}
+    assert len(course.scrape_problems) == 1
+
+
+@pytest.mark.unit
+def test_an_eva_row_that_cannot_be_tied_to_a_student_makes_the_eva_read_incomplete(monkeypatch):
+    from zoneinfo import ZoneInfo
+
+    course = BrightSpace_Course.__new__(BrightSpace_Course)
+    course.classlist = _classlist("Student One")
+    course.driver = MagicMock()
+    course.driver.current_window_handle = "main"
+    course.wait = MagicMock()
+    course.select_xpath = "//select"
+    course.course_start_date = DT.datetime(2026, 10, 1)
+    course.eva_date = DT.date(2026, 10, 31)
+    course.click_max_results_select = lambda _xpath: True
+    rows = [("Student One", "10/30/2026"), ("Student Two", "10/30/2026")]
+    monkeypatch.setattr(course, "_read_activity_rows", lambda *_args: (rows, 1))
+    monkeypatch.setattr("cqc_cpcc.brightspace.wait_for_ajax", lambda *_args: None)
+    monkeypatch.setattr("cqc_cpcc.brightspace.click_element_wait_retry", lambda *_args: None)
+    monkeypatch.setattr("cqc_cpcc.brightspace.close_tab", lambda *_args: None)
+
+    result = course.get_eva_activity_completions(
+        {"activity_type": "assignment", "activity_id": "a-1", "activity_url": "url"},
+        now=DT.datetime(2026, 10, 31, 23, 30, tzinfo=ZoneInfo("America/New_York")))
+
+    assert result.status == "incomplete" and result.records == {}
+    assert result.error_code == "student_not_in_classlist"

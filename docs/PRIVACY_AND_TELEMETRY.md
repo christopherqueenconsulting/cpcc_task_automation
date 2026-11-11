@@ -43,6 +43,17 @@ traceback before anything is written.
   it registers each student. After that, every spelling of the name becomes the
   student's alias, for example `Last, First`, `First Last`, `LAST FIRST` or
   `First_Last.java`. Registered IDs and e-mails become the alias too.
+- **Attendance identity (classlist).** Take Attendance ties BrightSpace activity to
+  MyColleges students by id, never by name text. Per course it reads the BrightSpace
+  classlist once (name, Org Defined ID and BrightSpace user id per learner) into
+  memory. Each activity row's own BrightSpace user id picks the classlist row, whose
+  Org Defined ID is the MyColleges student id. The name/id table lives only in that
+  run's memory: it is never written to disk or pickled, is dropped when collection
+  ends, and the attendance records and ledger hold Org Defined IDs only. Every
+  learner is registered with the redactor under an alias keyed by the Org Defined ID,
+  so logs carry only aliases (no names, ids or id fragments). A row that cannot be
+  tied to exactly one classlist learner is never written and keeps the course
+  incomplete.
 - **Aliases** look like `student_3f9a2c1d`. Each is an HMAC of the name under a
   machine-local key, `~/.cqc_cpcc/pii_alias.key`, created on first use with mode
   `0600`, or `CQC_PII_ALIAS_KEY` if you set it. The same student gets the same alias
