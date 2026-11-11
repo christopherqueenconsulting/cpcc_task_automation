@@ -1,0 +1,206 @@
+name: Deploy release
+
+# Moves the `release` branch, which Streamlit Community Cloud builds, to a release tag plus ONE
+# commit that adds requirements.txt generated from that tag's poetry.lock.
+#
+# Why: Community Cloud installs requirements.txt (with uv) faster than pyproject.toml, but a
+# tracked requirements.txt on master is a second dependency file that Dependabot bumps on its
+# own, out of step with poetry.lock (PRs #524, #543, #555). So master tracks poetry.lock only
+# and requirements.txt exists only on `release`. Runbook: docs/RELEASING.md.
+#
+# Deploy:   gh workflow run deploy-release.yml -f tag=v0.2.0
+# Dry run:  gh workflow run deploy-release.yml -f tag=v0.2.0 -f dry_run=true
+# Rollback: run it again with the last good tag.
+#
+# Two jobs so the write token never shares a job with third-party code: `build` (read-only)
+# runs uv/Poetry from PyPI and the export script; `push` (contents: write) runs only git and
+# first-party actions, re-checks what it is given, and force-pushes it.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to deploy (vX.Y.Z or vX.Y.Z-rcN). Its Release run must be green."
+        required: true
+        type: string
+      dry_run:
+        description: "Build the release commit and show the diff, but do not move `release`."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# A deploy is a write: never cancel one half way, and never run two at once.
+concurrency:
+  group: deploy-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Check the tag and generate requirements.txt
+    # Only the master copy of this file may deploy: a dispatch from another branch would run
+    # that branch's (possibly edited) workflow.
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read     # confirm the tag's Release run passed
+    outputs:
+      tag_sha: ${{ steps.tag.outputs.sha }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Check the tag
+        id: tag
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          # Validate the format before the value reaches git (it is user input).
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]] \
+            || { echo "::error::'$TAG' is not vX.Y.Z or vX.Y.Z-rcN"; exit 1; }
+          sha=$(git rev-parse --verify --quiet "refs/tags/$TAG^{commit}") \
+            || { echo "::error::tag $TAG does not exist"; exit 1; }
+          git merge-base --is-ancestor "$sha" origin/master \
+            || { echo "::error::$TAG is not on master"; exit 1; }
+          # The newest Release run for this tag must be green AND must have built this commit.
+          read -r conclusion run_sha < <(gh run list --workflow release.yml --branch "$TAG" \
+            --event push --limit 1 --json conclusion,headSha \
+            --jq '.[0] | "\(.conclusion // "none") \(.headSha // "none")"')
+          [ "$conclusion" = "success" ] \
+            || { echo "::error::the Release run for $TAG is '$conclusion', not success"; exit 1; }
+          [ "$run_sha" = "$sha" ] \
+            || { echo "::error::the Release run built $run_sha, but $TAG is $sha"; exit 1; }
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the tagged commit, keeping master's export script
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          # Tags from before requirements.txt left master carry an older export_requirements.sh
+          # that needs a local Poetry and appends no `-e .`. Always run master's copy.
+          cp export_requirements.sh "$RUNNER_TEMP/export_requirements.sh"
+          git checkout --quiet --detach "$SHA"
+          # The tag must also match pyproject.toml at that commit (same rule as release.yml).
+          python3 scripts/check_release_tag.py "$TAG"
+
+      - name: Set up uv for dependency export
+        uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+
+      - name: Generate requirements.txt
+        run: |
+          mkdir -p "$RUNNER_TEMP/deploy"
+          bash "$RUNNER_TEMP/export_requirements.sh" "$RUNNER_TEMP/deploy/requirements.txt"
+          echo "$(grep -c '==' "$RUNNER_TEMP/deploy/requirements.txt") pinned packages."
+
+      - name: Show the change against the current release branch
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ steps.tag.outputs.sha }}
+        run: |
+          current=$(git rev-parse --verify --quiet origin/release || echo none)
+          {
+            echo "### ${TAG} (\`${SHA}\`)"
+            echo "Current \`release\`: \`${current}\` (to restore it, redeploy the tag it was built from)."
+            echo "Dry run: ${{ inputs.dry_run }}"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "Code changes, current release -> $TAG:"
+          [ "$current" = none ] || git diff --stat "$current" "$SHA" -- . ':!requirements.txt'
+          echo "requirements.txt changes:"
+          if [ "$current" != none ] && git cat-file -e "$current:requirements.txt" 2>/dev/null; then
+            git show "$current:requirements.txt" | diff -u - "$RUNNER_TEMP/deploy/requirements.txt" || true
+          else
+            echo "(no requirements.txt on the current release)"
+          fi
+
+      - name: Upload the generated file
+        uses: actions/upload-artifact@v7
+        with:
+          name: deploy-requirements
+          path: ${{ runner.temp }}/deploy/requirements.txt
+          retention-days: 7
+          if-no-files-found: error
+
+  push:
+    name: Move the release branch
+    needs: build
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write   # force-push `release`
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Download the generated file
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: deploy-requirements
+          path: ${{ runner.temp }}/deploy
+
+      - name: Commit requirements.txt on top of the tag and force-push release
+        env:
+          TAG: ${{ inputs.tag }}
+          SHA: ${{ needs.build.outputs.tag_sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Re-check: the tag still points at the commit the build job checked.
+          [ "$(git rev-parse "refs/tags/$TAG^{commit}")" = "$SHA" ] \
+            || { echo "::error::$TAG moved since the build job"; exit 1; }
+          previous=$(git rev-parse --verify --quiet origin/release || echo none)
+          git checkout --quiet --detach "$SHA"
+          # The file came from a job that ran PyPI code. Accept only `-e .`, comments and exact
+          # `name==version ; markers` pins that poetry.lock at the tag also locks.
+          python3 -I - "$RUNNER_TEMP/deploy/requirements.txt" poetry.lock <<'PY'
+          import re, sys, tomllib
+          req, lock = sys.argv[1], sys.argv[2]
+          norm = lambda n: re.sub(r"[-_.]+", "-", n).lower()
+          locked = {(norm(p["name"]), p["version"]) for p in tomllib.load(open(lock, "rb"))["package"]}
+          pin = re.compile(r'([A-Za-z0-9][A-Za-z0-9._-]*)(\[[A-Za-z0-9,._-]+\])?==([0-9A-Za-z.+!_-]+)( ; [A-Za-z0-9_ .<>=!"\'()]+)?')
+          bad, pins = [], 0
+          for n, line in enumerate(open(req, encoding="utf-8").read().splitlines(), 1):
+              if not line.strip() or line.startswith("#") or line == "-e .":
+                  continue
+              m = pin.fullmatch(line)
+              if not m or (norm(m[1]), m[3]) not in locked:
+                  bad.append(f"line {n}: {line[:120]}")
+              else:
+                  pins += 1
+          if bad or not pins:
+              print("::error::generated requirements.txt does not match poetry.lock:", *bad[:20], sep="\n")
+              sys.exit(1)
+          print(f"{pins} pins, all in poetry.lock")
+          PY
+          cp "$RUNNER_TEMP/deploy/requirements.txt" requirements.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # requirements.txt is gitignored on master; -f adds it to the release commit only.
+          # --allow-empty: an older tag may already track an identical file; release stays tag + 1.
+          git add -f requirements.txt
+          git commit --quiet --allow-empty -m "deploy: requirements.txt for $TAG" \
+            -m "Generated from poetry.lock at $TAG by deploy-release.yml (run $GITHUB_RUN_ID)."
+          [ "$(git rev-parse HEAD^)" = "$SHA" ] || { echo "::error::release commit parent is not $TAG"; exit 1; }
+          # Same header actions/checkout uses; persist-credentials is off so only this step holds it.
+          auth=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+            push --force origin HEAD:refs/heads/release
+          {
+            echo "### Deployed $TAG"
+            echo "\`release\`: \`$previous\` -> \`$(git rev-parse HEAD)\` (tag \`$TAG\` + requirements.txt)."
+            echo "Check that Streamlit Community Cloud rebuilt the app from the new commit."
+          } >> "$GITHUB_STEP_SUMMARY"

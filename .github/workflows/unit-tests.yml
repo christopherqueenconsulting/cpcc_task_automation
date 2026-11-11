@@ -61,8 +61,10 @@ jobs:
           # An exact venv-cache hit is already the finished environment.
           skip-install-on-exact-hit: "true"
 
-      # Community Cloud prefers requirements.txt and processes it with uv where
-      # possible. Keep the generated deployment manifest in sync with Poetry's lock.
+      # Community Cloud installs requirements.txt (with uv) faster than pyproject.toml, so
+      # deploy-release.yml generates it from poetry.lock onto the `release` branch only.
+      # master keeps poetry.lock as its single dependency file, so Dependabot never bumps a
+      # second copy. Here: the export must still work, and requirements.txt must stay untracked.
       - name: Set up uv for dependency export
         if: matrix.shard == 1
         uses: astral-sh/setup-uv@v10.3.3
@@ -70,11 +72,12 @@ jobs:
         if: matrix.shard == 1
         shell: bash
         run: |
-          uv tool run --from poetry==2.5.1 --with poetry-plugin-export==1.10.1 \
-            poetry export --without-hashes --format=requirements.txt > "$RUNNER_TEMP/requirements.txt"
-          # Community Cloud installs this manifest with uv; include the src-layout app itself.
-          printf '%s\n' '-e .' >> "$RUNNER_TEMP/requirements.txt"
-          diff -u requirements.txt "$RUNNER_TEMP/requirements.txt"
+          if git ls-files --error-unmatch requirements.txt >/dev/null 2>&1; then
+            echo "::error::requirements.txt is tracked on this branch. It is generated at deploy time (deploy-release.yml); delete it and keep poetry.lock as the only dependency file."
+            exit 1
+          fi
+          ./export_requirements.sh "$RUNNER_TEMP/requirements.txt"
+          echo "Exported $(grep -c '==' "$RUNNER_TEMP/requirements.txt") pinned packages."
 
       # What the runner gives xdist. `-n auto` uses psutil physical cores (2 of 4 vCPUs) when psutil imports.
       - name: CPU diagnostic

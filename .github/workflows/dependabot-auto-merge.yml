@@ -63,11 +63,5 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Comment on major updates
-        # For major updates, add a comment but don't auto-merge
-        if: steps.metadata.outputs.update-type == 'version-update:semver-major'
-        run: |
-          gh pr comment "$PR_URL" --body "🚨 This is a **major version update**. Please review carefully before merging."
-        env:
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # Major updates are not auto-merged. dependabot-triage.yml posts a MERGE / MERGE AFTER
+      # SMOKE / HOLD recommendation on them once CI finishes.

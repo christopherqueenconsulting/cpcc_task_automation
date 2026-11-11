@@ -138,15 +138,44 @@ recorded in this repository, so ask Christopher for it. The repository's push we
 builds from `release`, a merge to `master` does **not** reach the instructor; a release does, when
 `release` is moved to it.
 
-To put a tagged release in front of the instructor, after the Release run for the tag is green:
+To put a tagged release in front of the instructor, after the Release run for the tag is green,
+run the **Deploy release** workflow (`.github/workflows/deploy-release.yml`):
 
 ```bash
-git fetch origin --tags
-git rev-parse 'vX.Y.Z^{commit}'                        # pre-check: the commit the tag points at
-git push origin 'vX.Y.Z^{commit}:refs/heads/release'  # a fast-forward when the tag is newer than release
+gh workflow run deploy-release.yml -f tag=vX.Y.Z -f dry_run=true   # optional: show the diff only
+gh workflow run deploy-release.yml -f tag=vX.Y.Z
 ```
 
-An rc is live from that push, so move `release` to an rc only when Christopher has said to; the rc
+It runs only from `master`. It checks the tag (format, on `master`, matches `pyproject.toml`,
+newest Release run for the tag green and built from the tag's commit), then
+force-pushes `release` to the tag plus one commit, `deploy: requirements.txt for vX.Y.Z`. That
+commit adds `requirements.txt` generated from the tag's `poetry.lock` by `export_requirements.sh`.
+`requirements.txt` exists **only** on `release`: Community Cloud installs it (with uv) faster than
+`pyproject.toml`, and `master` keeps `poetry.lock` as its single dependency file so Dependabot never
+bumps a second copy out of step (PRs #524, #543, #555). Never commit `requirements.txt` to `master`;
+CI fails if it is tracked. The push is a normal git push, so the repository webhook to
+`share.streamlit.io` should fire and the app redeploy; this is not yet confirmed for a push made
+by the workflow token, so check the app after the first deploy (use an rc tag). The run summary
+records the previous and the new `release` commit.
+
+If the Deploy run fails, `release` is unchanged (the push is the last step):
+
+- *Tag check fails* (format, not on `master`, Release run not green or built from another
+  commit): fix the cause, usually by re-running the Release workflow for the tag. There is no
+  override input; when the check itself is wrong, use the manual fallback below.
+- *Push rejected* (a ruleset or branch protection on `release`): allow the `github-actions` app to
+  push to `release`, or use the manual fallback.
+- *"the Release run built X, but vX.Y.Z is Y"*, or no Release run is found (run records
+  expire): re-running Release does not help; use the manual fallback, or cut the next rc.
+- *Export fails* (PyPI or uv down) or *"generated requirements.txt does not match poetry.lock"*:
+  re-run the workflow later; the second one means the export produced a line the lock does not
+  pin, so do not deploy by hand until it is understood.
+
+To find the tag a `release` commit came from: `git log -1 --format=%s <sha>` prints
+`deploy: requirements.txt for vX.Y.Z`. If the app does not rebuild after a green run, use
+"Reboot app" in the Streamlit Community Cloud dashboard.
+
+An rc is live from that run, so move `release` to an rc only when Christopher has said to; the rc
 checklist above is then run against the live build. `master` carries whatever has merged and is not
 what the instructor grades with.
 
@@ -156,10 +185,22 @@ To try a tag on a computer: `git fetch --tags && git checkout v0.2.0-rc1 && ./ru
 
 1. Find the last good tag: `git tag --sort=-v:refname` or the GitHub releases page.
 2. Roll the code back. Redeploy the last good tag at once with
-   `git rev-parse '<tag>^{commit}'` (pre-check: it must print the commit you expect), then
-   `git push --force origin '<tag>^{commit}:refs/heads/release'` (only Christopher force-pushes `release`).
-   The `^{commit}` form is needed because release tags are annotated: git may refuse to push a tag
-   object to a branch ref.
+   `gh workflow run deploy-release.yml -f tag=<tag>` (needs `gh auth status` with write access).
+   Do not push the bare tag to `release`: a tag from after this change has no `requirements.txt`,
+   and Community Cloud would fall back to `pyproject.toml`. Manual fallback, when Actions is down
+   or the tag check is wrong (needs `uv`; it uses `master`'s export script, because a tag from
+   before this change carries an older one):
+
+   ```bash
+   git fetch origin --tags && git checkout --detach origin/master
+   cp export_requirements.sh /tmp/export_requirements.sh
+   git checkout --detach '<tag>^{commit}'
+   bash /tmp/export_requirements.sh requirements.txt
+   git add -f requirements.txt
+   git commit --allow-empty -m "deploy: requirements.txt for <tag>"
+   git push --force origin HEAD:refs/heads/release
+   ```
+
    Then fix forward on `master`: open a revert PR for the bad change (do not rewrite `master`),
    bump the version and add a CHANGELOG entry in the same PR so new grades are not stamped with
    the bad version, merge it and cut a release as above.
