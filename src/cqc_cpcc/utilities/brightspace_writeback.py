@@ -1172,6 +1172,25 @@ def _ensure_score_committed(driver, score, attempts: int = 4) -> bool:
     return False
 
 
+def _await_rubric_match(driver, selections: list, attempts: int = 16) -> dict:
+    """Dry-run the rubric match, re-checking while anything is unmatched.
+
+    The rubric panel hydrates after the score input and feedback editor: a criterion's
+    radiogroup can exist with no levels yet (seen live 2026-11-11), which would report
+    a false "level not found". Re-check every 0.5s, at most ``attempts`` times, so a
+    real mismatch costs a few seconds and a slow render is not mistaken for one.
+    """
+    import time as _t
+    res = _select_rubric_levels(driver, selections, dry_run=True)
+    for _ in range(max(attempts - 1, 0)):
+        missing = res.get("missing")
+        if not (isinstance(missing, list) and missing):
+            break
+        _t.sleep(0.5)
+        res = _select_rubric_levels(driver, selections, dry_run=True)
+    return res
+
+
 def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWriteOutcome,
                        progress, dry_run: bool, feedback_mode: str = "attach",
                        update_published: bool = False) -> None:
@@ -1191,7 +1210,7 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
     # Wait for every selected write target before touching any field. In inline mode
     # the feedback editor can hydrate after the score input, so require both.
     targets = _wait_for_write_targets(driver, require_feedback=not attach and not skip_feedback)
-    rubric_check = _select_rubric_levels(driver, item.rubric_selections, dry_run=True)
+    rubric_check = _await_rubric_match(driver, item.rubric_selections)
     rubric_selected = rubric_check.get("selected") or []
     rubric_missing = rubric_check.get("missing") or []
     save_target = _locate_save_draft(driver)

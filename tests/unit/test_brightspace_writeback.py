@@ -520,6 +520,7 @@ def test_write_one_student_selects_rubric_before_fill_and_saves(mocker):
 
 @pytest.mark.unit
 def test_write_one_student_dry_run_reports_rubric_matches_without_saving(mocker):
+    mocker.patch("time.sleep")
     driver = MagicMock()
     mocker.patch.object(wb, "_locate_write_targets", return_value={"score": True, "feedback": True})
     mocker.patch.object(wb, "_locate_save_draft", return_value=True)
@@ -532,8 +533,9 @@ def test_write_one_student_dry_run_reports_rubric_matches_without_saving(mocker)
         wb.RubricLevelSelection("Program Performance", "Above Average"),
         wb.RubricLevelSelection("Style", "Full")])
     wb._write_one_student(driver, MagicMock(), item, o, lambda *_: None, dry_run=True)
-    rub.assert_called_once()
-    assert rub.call_args.kwargs.get("dry_run") is True     # matched only, not clicked
+    # A persistent mismatch is re-checked a bounded number of times, never clicked.
+    assert rub.call_count == 16
+    assert all(c.kwargs.get("dry_run") is True for c in rub.call_args_list)
     assert o.rubric_selected == 1 and len(o.rubric_missing) == 1 and not o.saved
     # An unmatched rubric level is reported but no longer blocks the score/feedback.
     assert o.fields_found and "rubric 1/2 matched" in o.note
@@ -1182,6 +1184,33 @@ def test_select_rubric_levels_drops_missing_optional_criterion():
     res = wb._select_rubric_levels(driver, sels, dry_run=True)
     assert [m["criterion"] for m in res["missing"]] == ["Style", "Overall Score"]
     assert res["missing"][1]["reason"] == "level not found"
+
+
+@pytest.mark.unit
+def test_await_rubric_match_rechecks_until_levels_render(mocker):
+    """A radiogroup with no levels yet must not be reported as a mismatch."""
+    mocker.patch("time.sleep")
+    unrendered = {"selected": [], "missing": [
+        {"criterion": "Program Performance", "level": "Superior", "reason": "level not found"}]}
+    rendered = {"selected": [{"criterion": "Program Performance", "level": "Superior"}],
+                "missing": []}
+    sel = mocker.patch.object(wb, "_select_rubric_levels",
+                              side_effect=[unrendered, unrendered, rendered])
+    res = wb._await_rubric_match(MagicMock(), [wb.RubricLevelSelection("Program Performance",
+                                                                       "Superior")])
+    assert res == rendered
+    assert sel.call_count == 3
+
+
+@pytest.mark.unit
+def test_await_rubric_match_gives_up_after_attempts(mocker):
+    mocker.patch("time.sleep")
+    missing = {"selected": [], "missing": [
+        {"criterion": "Style", "level": "Full", "reason": "level not found"}]}
+    sel = mocker.patch.object(wb, "_select_rubric_levels", return_value=missing)
+    res = wb._await_rubric_match(MagicMock(), [wb.RubricLevelSelection("Style", "Full")],
+                                 attempts=4)
+    assert res["missing"] and sel.call_count == 4
 
 
 def _published_page(mocker):
