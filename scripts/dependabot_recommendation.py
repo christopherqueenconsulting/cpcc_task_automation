@@ -36,6 +36,9 @@ _DETAILS = re.compile(r"<details>.*?</details>", re.DOTALL)
 _META_NAME = re.compile(r"^- dependency-name: (\S+)$", re.MULTILINE)
 _SAFE_NAME = re.compile(r"[A-Za-z0-9._@/+-]+")
 _SAFE_VERSION = re.compile(r"[0-9A-Za-z.+_-]+")
+_SAFE_GROUP = re.compile(r"[A-Za-z0-9._-]+")
+DEP_TYPES = {"direct:production", "direct:development", "indirect"}
+UPDATE_TYPES = {f"version-update:semver-{level}" for level in LEVELS}
 
 
 @dataclass
@@ -48,7 +51,7 @@ class Update:
 
     @property
     def level(self) -> str:
-        if self.update_type.startswith("version-update:semver-"):
+        if self.update_type in UPDATE_TYPES:
             return self.update_type.rsplit("-", 1)[1]
         if not (_SAFE_VERSION.fullmatch(self.old) and _SAFE_VERSION.fullmatch(self.new)):
             return "unknown"
@@ -130,14 +133,16 @@ def parse_updates(body: str, commit_message: str = "") -> list[Update]:
         if body_new != new:
             old = "?"
         old, new = (v if _SAFE_VERSION.fullmatch(v) else "?" for v in (old, new))
-        updates.append(Update(name, old, new, entry.get("dependency-type", "unknown"),
-                              entry.get("update-type", "")))
+        dep_type = entry.get("dependency-type", "unknown")
+        update_type = entry.get("update-type", "")
+        updates.append(Update(name, old, new, dep_type if dep_type in DEP_TYPES else "unknown",
+                              update_type if update_type in UPDATE_TYPES else ""))
     return updates
 
 
 def dependency_group(commit_message: str) -> str:
     match = re.search(r"^\s+dependency-group: (\S+)$", commit_message, re.MULTILINE)
-    return match.group(1) if match else ""
+    return match.group(1) if match and _SAFE_GROUP.fullmatch(match.group(1)) else ""
 
 
 def summarize_checks(check_runs: list[dict], ignore: str = "") -> Checks:
@@ -286,7 +291,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     commits = [c for page in gh_json(f"repos/{args.repo}/pulls/{args.pr}/commits?per_page=100") for c in page]
-    messages = [c["commit"]["message"] for c in commits]
+    # Only Dependabot's own commits carry trusted metadata; a pushed fix-up commit does not.
+    messages = [c["commit"]["message"] for c in commits if (c.get("author") or {}).get("login") == "dependabot[bot]"]
     bot_commit = next((m for m in messages if "updated-dependencies:" in m), "")
     updates = parse_updates(pr.get("body") or "", bot_commit)
     group = dependency_group(bot_commit)

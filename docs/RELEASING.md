@@ -165,6 +165,15 @@ If the Deploy run fails, `release` is unchanged (the push is the last step):
   override input; when the check itself is wrong, use the manual fallback below.
 - *Push rejected* (a ruleset or branch protection on `release`): allow the `github-actions` app to
   push to `release`, or use the manual fallback.
+- *"the Release run built X, but vX.Y.Z is Y"*, or no Release run is found (run records
+  expire): re-running Release does not help; use the manual fallback, or cut the next rc.
+- *Export fails* (PyPI or uv down) or *"generated requirements.txt does not match poetry.lock"*:
+  re-run the workflow later; the second one means the export produced a line the lock does not
+  pin, so do not deploy by hand until it is understood.
+
+To find the tag a `release` commit came from: `git log -1 --format=%s <sha>` prints
+`deploy: requirements.txt for vX.Y.Z`. If the app does not rebuild after a green run, use
+"Reboot app" in the Streamlit Community Cloud dashboard.
 
 An rc is live from that run, so move `release` to an rc only when Christopher has said to; the rc
 checklist above is then run against the live build. `master` carries whatever has merged and is not

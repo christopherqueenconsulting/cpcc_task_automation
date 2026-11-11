@@ -195,3 +195,17 @@ def test_render_reports_a_refused_advisory_lookup():
     body = rec.render(rec.parse_updates(GROUP_BODY, GROUP_COMMIT), GREEN, [], "python-security", "",
                       advisory_error="HTTP 403")
     assert "Advisory lookup unavailable (HTTP 403)" in body
+
+
+@pytest.mark.unit
+def test_metadata_fields_outside_the_known_values_are_neutralised():
+    commit = (GROUP_COMMIT.replace("direct:production", "x|[a](http://e)")
+              .replace("dependency-group: python-security", "dependency-group: a`b-security"))
+    commit = commit.replace("  dependency-version: 13.0.0\n",
+                            "  dependency-version: 13.0.0\n  update-type: version-update:semver-evil\n")
+    updates = rec.parse_updates(GROUP_BODY, commit)
+    assert (updates[0].dep_type, updates[0].update_type, updates[0].level) == ("unknown", "", "major")
+    assert rec.dependency_group(commit) == ""
+    body = rec.render(updates, GREEN, [], rec.dependency_group(commit), "")
+    assert "http://e" not in body and "a`b" not in body
+    assert rec.verdict(updates, GREEN, [], rec.dependency_group(commit))[0] == "MERGE AFTER SMOKE"
