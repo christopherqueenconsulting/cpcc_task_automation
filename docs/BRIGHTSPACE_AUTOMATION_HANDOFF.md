@@ -340,22 +340,89 @@ Summary).** Legacy nested-iframe picker; the working mechanics:
    The widget (`d2l-consistent-evaluation-attachments-editor`) is SHARED by the assignment eval
    page — **assignment route uses the same UI; verify with a real assignment URL**.
 
-**ASSIGNMENT ATTACH = BULK "ADD FEEDBACK FILES" ZIP IMPORT — VERIFIED LIVE 2026-07-10
-(ou=<id> db=<id>; imported Student B's Feedback.docx as a draft, then removed it
-cleanly).** The assignment route does NOT reuse the per-attempt `_attach_feedback_file`.
-Instead, ATTACH mode delivers ALL clean feedback `.docx` files in ONE bulk upload via the
-dropbox submissions page's header button **"Add Feedback Files"** — BrightSpace distributes
-each file to the matching submitter as DRAFT feedback, matched PURELY by the **leading
-submission-ID** in its enclosing folder name (the same ID-bearing name the download produced =
-`GradeWriteItem.student_key`). Only SUBMITTERS are matched (non-submitters have no download ID
-and are skipped). This route writes NO scores — scores/rubric use inline mode. Code:
-`build_feedback_docs_zip` (packs `{student_key}/Feedback.docx`), `import_feedback_zip` (JS-click
-"Add Feedback Files" → LAST `iframe[title='Add Feedback Files']` = active dialog → **REAL**
-`.click()` on `div.d2l-fileinput-addbuttons button` → `send_keys(zip)` → JS-click "Add", keep
-"Overwrite Duplicate Files" checked), `_import_assignment_feedback_docs` (wires it into
-`_push_assignment_grades` when `feedback_mode=="attach"`). Cleanup/remove control:
-`d2l-button-icon`/`button` aria-label `"Remove Attachment: <filename>"` inside
+**ASSIGNMENT ATTACH = BULK "ADD FEEDBACK FILES" ZIP IMPORT.** The assignment route does NOT
+reuse the per-attempt `_attach_feedback_file`. ATTACH mode delivers ALL clean feedback `.docx`
+files in ONE bulk upload via the dropbox submissions page's header button **"Add Feedback
+Files"**; BrightSpace distributes each file to the matching submitter as DRAFT feedback. Only
+SUBMITTERS can be matched. This import writes NO scores (the per-learner pass does). Code:
+`build_feedback_docs_zip`, `bulk_feedback_folder_name`, `import_feedback_zip` (JS-click "Add
+Feedback Files" → LAST `iframe[title='Add Feedback Files']` = active dialog → **REAL** `.click()`
+on `div.d2l-fileinput-addbuttons button` → `send_keys(zip)` → JS-click "Add", keep "Overwrite
+Duplicate Files" checked → wait for "Processing Extracted Files..." to end),
+`_import_assignment_feedback_docs`, `_verify_imported_attachments` (wired into
+`_push_assignment_grades` when `feedback_mode=="attach"`). The remove control on an evaluation
+page is `d2l-button-icon` with aria-label `"Remove Attachment: <filename>"` inside
 `d2l-consistent-evaluation-attachments-editor`.
+
+### Bulk feedback ZIP format (observed live 2026-11-11; pinned by `tests/unit/test_bulk_feedback_zip_format.py`)
+
+**The failure this explains.** A full-class run reported "feedback doc imported as draft" for
+all 20 learners and attached nothing. BrightSpace's dialog says *"Upload compressed zip file in
+the same format that it was downloaded."* The earlier assumption here (match on a "leading
+submission-ID" in a folder named by `GradeWriteItem.student_key`) was wrong: the grader's key is
+a **bare name**, because `zip_grading_utils._parse_student_folder_name` strips the id and the
+date. A ZIP of `<name>/<file>` matches no one, and the old code never looked at the result.
+
+**The download.** The BrightSpace "Download" ZIP is a top-level `index.html` plus one folder per
+submission named `<userId>-<dropboxId> - <name> - <date time>/`, e.g.
+`100003-900 - Ben Sample - Nov 8, 2026 6:10 PM/` (synthetic). `<userId>` is the BrightSpace user
+id, the same number as the `feedback,<userId>` token on the learner's link (20 of 20 folders
+equalled a user id on the page; the name match agreed in all 20; owner's run, no artifact kept). `<dropboxId>` is the `db=` of
+the assignment URL, not a per-student submission id.
+
+**What an upload must look like** (observed live in the owner's run on 2026-11-11: one learner, a throwaway `.docx` per variant, draft only. The raw run logs hold student data, so no artifact is kept in this public repo; the unit tests pin the result):
+
+| ZIP folder | Result |
+|---|---|
+| `<userId>-<dropboxId> - <name> - <date time>/` (the download's own) | attached |
+| `<userId>-<dropboxId> - <name>/` (no date) | **attached** |
+| `<userId>-<dropboxId>/` (no name) | **not attached.** A "Distribute Feedback" prompt opens: *"Feedback requiring distribution: 1. Identifiers were not found on these files. Attach each file to a submission."* |
+| `<name>/` (the grader's bare key; the old ZIP) | attached nothing, no error |
+
+Rules the code follows:
+1. Folders at the ZIP root, no wrapper folder. `index.html` is not needed.
+2. Folder = `<userId>-<dropboxId> - <name>` (`bulk_feedback_folder_name`). `<userId>` comes from the
+   learner's page (`_gather_assignment_learners`), `<dropboxId>` from `db=` in the URL
+   (`_dropbox_id`), `<name>` from the grade item. The date is not needed, so none is invented.
+   A missing id or an empty name raises `ValueError` and that learner is skipped with a warning
+   instead of sending a shape BrightSpace refuses.
+3. One file per folder, named `Feedback.docx` (`BULK_FEEDBACK_FILE_NAME`) so the student sees a clean
+   name, not the temp file's. The file name inside does not affect matching.
+4. After "Add", BrightSpace shows *"Processing Extracted Files... Loading... Processing..."* while
+   it unpacks (seen still busy 4 s after "Add" for a single file; how long a whole class takes
+   is not measured yet). `_wait_import_done` polls up to 120 s; leaving early may cancel the
+   import (suspected, not proven). Text that
+   says error / not found (the Distribute Feedback prompt included) is a FAILED import
+   (`_IMPORT_ERROR_RE`).
+5. The dialog's closing text is not proof. `_verify_imported_attachments` re-opens each
+   learner's page and requires an attachment named exactly `Feedback.docx`, so a learner who
+   already had some other attachment is not counted. A miss sets `feedback_attached=False`,
+   adds a warning and makes the report incomplete.
+6. "Overwrite Duplicate Files" stays ticked: re-importing replaces the same `Feedback.docx`.
+7. Published learners are left out unless "Update published grades" is ticked (the import would
+   change feedback a student can already see).
+
+From college help pages found by a research agent (NOT official D2L docs, so treat as
+background): the upload must mirror the download layout; "do not change the ID prefixed to the
+folder name"; uploads become draft feedback; the import works only for learners who submitted
+a file and, per one source, only for the current results page (at most 200); it does not work
+with Anonymous Grading. Not found anywhere: whether the date suffix is required (our test says
+no), what `index.html` contains, size or file-type limits.
+
+**Undo.** The import only adds DRAFT feedback: nothing is published and no grade changes.
+1. *Remove a wrong or unwanted import, per learner:* open the evaluation page and click
+   `Remove Attachment: Feedback.docx`. There is no bulk undo.
+2. *"Overwrite Duplicate Files"* replaces an existing `Feedback.docx` on that learner and
+   BrightSpace keeps no earlier copy, so keep the originals if you may need them back.
+   Re-running after a failed or partial import is safe: it replaces, never duplicates.
+3. *A grade that did not hold:* a draft stays unpublished, so retype it by hand or re-run. With
+   "Update published grades" ticked the score it replaced is recorded (`outcome.previous_score`,
+   the republished-scores record); restore it by hand.
+4. *Revert the code:* `git revert` the merge commit. The generated ZIP is deleted after every run.
+
+**Never change the folder shape without a one-learner live test** (a throwaway file, an
+assignment you can write a draft on, then "Remove Attachment"). Update the table above and the
+tests together.
 
 **ASSIGNMENT LEARNER DISCOVERY — HARDENED & VERIFIED LIVE 2026-07-10 (ou=<id> db=<id>).**
 The flaky "0 learners" was a WRONG-VIEW bug: `_open_and_login`'s "Submissions" tab click
@@ -368,7 +435,8 @@ scrape found nothing. Fix: `_submissions_users_url(url)` rebuilds the per-user U
 the view + maxes page size, and warns (no crash) on 0 submitters. Verified live: reproduced the
 per-file landing, then gathered all 7 submitters, matched by name, and located each eval page's
 write targets in DRY RUN. The per-user view is SUBMITTERS-only (matches the graded set); the
-`feedback,<userId>` userId == the leading number of the download folder name / `student_key`.
+`feedback,<userId>` userId == the leading number of the download folder name (`<userId>-<dropboxId> - ...`; the
+second number is the `db=` of the URL). The grader's `student_key` is a bare name, not that folder name.
 
 **Still UNVERIFIED (needs a safe write target):** the ASSIGNMENT route's real Save-as-draft
 FILL was verified 2026-07-01 (CSC134 Project 2) — unchanged by the discovery hardening above;

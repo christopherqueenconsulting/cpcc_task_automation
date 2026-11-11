@@ -548,6 +548,16 @@ undoable from inside this tool. Treat it as a publish, because it is one.
 Both routes default to `dry_run=True`: navigate, locate the score input and the
 feedback editor, log what *would* be written, change nothing.
 
+**Assignment "Attach" delivery** uploads every learner's feedback `.docx` in one
+"Add Feedback Files" ZIP. BrightSpace only matches a ZIP laid out like its own download:
+folders at the root named `<userId>-<dropboxId> - <name>/`, one `Feedback.docx` in each
+(`<userId>` from the learner's page, `<dropboxId>` from `db=` in the URL). The grader's
+student key is only a name, so the folders are rebuilt at import time; a bare-name or id-only
+folder attaches nothing (BrightSpace opens a "Distribute Feedback" prompt instead). The
+import is confirmed by looking for `Feedback.docx` on each learner's own page, never by the
+dialog. Format, evidence and rules: `docs/BRIGHTSPACE_AUTOMATION_HANDOFF.md`, "Bulk feedback
+ZIP format"; pinned by `tests/unit/test_bulk_feedback_zip_format.py`.
+
 ### Reading Student Files
 
 `read_file()` resolves its path and confines it to an allowed root before opening

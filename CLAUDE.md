@@ -78,6 +78,12 @@ student work in a prompt renderer or eval fixture. Details: `docs/security-workf
 - BrightSpace write-back defaults to `dry_run=True`. Assignment write-back saves a draft;
   quiz write-back publishes to the student immediately. See "Writing Grades Back to
   BrightSpace" in `docs/ARCHITECTURE.md`.
+- Assignment "Attach" delivery imports feedback with BrightSpace's bulk "Add Feedback Files" ZIP, which
+  only matches the download's layout: folders `<userId>-<dropboxId> - <name>/Feedback.docx` at the root
+  (user id from the learner's page, `db=` from the URL; the grader's key is a bare name, so the folders are
+  rebuilt). The import is verified per learner by file name, not by the dialog. Do not change the shape
+  without a one-learner live test: `docs/BRIGHTSPACE_AUTOMATION_HANDOFF.md` ("Bulk feedback ZIP format"),
+  `tests/unit/test_bulk_feedback_zip_format.py`.
 - Every LLM call site is registered in `prompt_registry.json`. Changing a prompt means
   bumping its `version` and running
   `poetry run python -m cqc_cpcc.model_eval prompts fingerprint --write`; adding one
