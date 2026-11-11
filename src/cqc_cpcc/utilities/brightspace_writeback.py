@@ -1461,14 +1461,23 @@ def _click_commit(driver, include: tuple, exclude: tuple) -> bool:
 # overall "Overall grade" input.
 _FIND_SCORE_INPUT_JS = r"""
 const SELS = arguments[0];
-function* deep(root){const s=[root.documentElement||root];while(s.length){const n=s.pop();if(!n)continue;yield n;const kids=[...(n.children||[])];for(let i=kids.length-1;i>=0;i--)s.push(kids[i]);if(n.shadowRoot)s.push(n.shadowRoot);}}
+function* deep(root){
+  const s=[root.documentElement||root];
+  while(s.length){
+    const n=s.pop(); if(!n)continue; yield n;
+    const k=[...(n.children||[])];
+    for(let i=k.length-1;i>=0;i--)s.push(k[i]);
+    if(n.shadowRoot)s.push(n.shadowRoot);
+  }
+}
 const all=[...deep(document)];
 for(const sel of SELS){
   for(const el of all){
     let ok=false; try{ok=!!(el.matches&&el.matches(sel));}catch(e){}
     if(!ok) continue;
     if((el.tagName||'').toLowerCase()==='input') return el;
-    const inp = (el.shadowRoot && el.shadowRoot.querySelector('input')) || (el.querySelector && el.querySelector('input'));
+    const inp = (el.shadowRoot && el.shadowRoot.querySelector('input'))
+      || (el.querySelector && el.querySelector('input'));
     if(inp) return inp;
   }
 }

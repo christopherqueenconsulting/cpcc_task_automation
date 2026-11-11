@@ -39,7 +39,15 @@ OUT_DIR = os.path.join(os.path.dirname(__file__), "..", "output", "writeback_pro
 # Deep walk in document order across shadow roots (not iframes: values there are
 # submission/feedback bodies we do not want to read).
 _INVENTORY_JS = r"""
-function* deep(root){const s=[root.documentElement||root];while(s.length){const n=s.pop();if(!n)continue;yield n;const k=[...(n.children||[])];for(let i=k.length-1;i>=0;i--)s.push(k[i]);if(n.shadowRoot)s.push(n.shadowRoot);}}
+function* deep(root){
+  const s=[root.documentElement||root];
+  while(s.length){
+    const n=s.pop(); if(!n)continue; yield n;
+    const k=[...(n.children||[])];
+    for(let i=k.length-1;i>=0;i--)s.push(k[i]);
+    if(n.shadowRoot)s.push(n.shadowRoot);
+  }
+}
 function host(el){const r=el.getRootNode&&el.getRootNode();return (r&&r.host)?(r.host.tagName||'').toLowerCase():'';}
 function vis(el){try{const r=el.getBoundingClientRect();return r.width>0&&r.height>0;}catch(e){return false;}}
 function a(el,n){return (el.getAttribute&&el.getAttribute(n))||'';}
@@ -64,7 +72,8 @@ for(const el of deep(document)){
     const levels=[...deep(el)].filter(x=>a(x,'role')==='radio').map(x=>short((x.textContent||'').split(/[,:]/)[0]));
     out.rubric.push({criterion:nm,levels:levels,host:host(el),visible:vis(el)});
   } else if(t==='select'){
-    out.selects.push({aria_label:a(el,'aria-label'),options:[...el.querySelectorAll('option')].map(o=>short(o.textContent)).slice(0,10)});
+    const opts=[...el.querySelectorAll('option')].map(o=>short(o.textContent)).slice(0,10);
+    out.selects.push({aria_label:a(el,'aria-label'),options:opts});
   }
   if(/rubric/.test(t)){const k=t+(vis(el)?':visible':':hidden');out.rubric_tags[k]=(out.rubric_tags[k]||0)+1;}
   if(/^attach$/i.test(a(el,'aria-label').trim()))out.attach.push({tag:t,visible:vis(el)});
