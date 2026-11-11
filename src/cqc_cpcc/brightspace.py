@@ -941,20 +941,25 @@ class BrightSpace_Course:
     def _row_user_id(row) -> str | None:
         """The BrightSpace user id in a results row's own links (learner link or quiz attempt link), else None.
 
-        Exactly one id must be found: two different ids in one row mean the row cannot be trusted.
+        Exactly one id must be found, and every id-bearing link (a ``feedback,`` handler or an ``/actor/``
+        href) must yield it: two different ids, or an id-bearing link that does not decode, mean the row
+        cannot be trusted and it is left without a user id (so it is never recorded).
         """
         links = row.find_elements(By.XPATH, ".//a")
         if not isinstance(links, (list, tuple)):
             return None
-        found = set()
+        found, unreadable = set(), False
         for link in links:
             get_attribute = getattr(link, "get_attribute", None)
             if not callable(get_attribute):
                 continue
-            uid = user_id_from_onclick(get_attribute("onclick")) or user_id_from_actor_href(get_attribute("href"))
+            onclick, href = get_attribute("onclick"), get_attribute("href")
+            uid = user_id_from_onclick(onclick) or user_id_from_actor_href(href)
             if uid:
                 found.add(uid)
-        return found.pop() if len(found) == 1 else None
+            elif (isinstance(onclick, str) and "feedback," in onclick) or (isinstance(href, str) and "/actor/" in href):
+                unreadable = True
+        return found.pop() if len(found) == 1 and not unreadable else None
 
     def _snapshot_activity_page(self, table_xpath: str, name_cell: int,
                                 date_cell: int, pages_read: int,
@@ -1231,8 +1236,8 @@ class BrightSpace_Course:
     def _student_key(self, row) -> str | None:
         """The Org Defined ID (the MyColleges student id) for one activity row, or None.
 
-        Joined through the classlist: the row's BrightSpace user id when it carries one, else its exact
-        whole-word name. Never a fuzzy name match.
+        Joined through the classlist by the row's BrightSpace user id (the row's name is only a cross-check).
+        A row without a trustworthy user id is unresolved: there is no name-only match.
         """
         classlist = getattr(self, "classlist", None)
         if not classlist:

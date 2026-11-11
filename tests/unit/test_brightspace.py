@@ -2366,3 +2366,46 @@ def test_the_classlist_is_dropped_even_when_collection_raises():
     from cqc_cpcc.utilities import pii_redaction
 
     assert pii_redaction._known_names == {} and pii_redaction._known_tokens == {}
+
+
+@pytest.mark.unit
+def test_a_rejected_classlist_leaves_no_names_or_ids_in_the_log_redactor(monkeypatch):
+    from cqc_cpcc.utilities import pii_redaction
+
+    course = _classlist_course(monkeypatch, _classlist_data(
+        _row("101", "1000001", "Adams, Ann"), _row("102", "1000002", "Brown, Bob"),
+        _row("101", "1000009", "Clark, Cid")))
+    assert course._read_classlist() is None
+    assert "ValueError" in course.scrape_problems[0]
+    assert pii_redaction._known_names == {} and pii_redaction._known_tokens == {}
+
+
+@pytest.mark.unit
+def test_a_row_with_one_valid_link_and_one_garbage_id_link_has_no_user_id():
+    def link(onclick=None, href=None):
+        return MagicMock(get_attribute=lambda name, _o=onclick, _h=href: {"onclick": _o, "href": _h}.get(name))
+
+    row = MagicMock()
+    good = link(onclick="feedback,101,5")
+    row.find_elements.return_value = [good, link(href="https://d2l.example/x/actor/!!bad!!?a=b")]
+    assert BrightSpace_Course._row_user_id(row) is None
+    row.find_elements.return_value = [good, link(onclick="feedback,xyz")]
+    assert BrightSpace_Course._row_user_id(row) is None
+    row.find_elements.return_value = [good, link(onclick="return false", href="https://d2l.example/x")]
+    assert BrightSpace_Course._row_user_id(row) == "101"
+
+
+@pytest.mark.unit
+def test_a_quiz_row_with_a_garbage_actor_link_is_never_recorded_even_with_a_unique_name(
+        ordinary_completion_course):
+    from cqc_cpcc.student_identity import ActivityRow
+
+    course = ordinary_completion_course
+    row = MagicMock()
+    bad_href = "https://d2l.example/x/actor/!!bad!!?a=b"
+    row.find_elements.return_value = [MagicMock(get_attribute=lambda name: bad_href if name == "href" else None)]
+    # What the snapshot would attach for that row: no user id, so the unique name resolves to nothing.
+    user_id = BrightSpace_Course._row_user_id(row)
+    course._read_activity_rows = MagicMock(return_value=([ActivityRow("Student One", "10/20/2026", user_id)], 1))
+    course._collect_ordinary_activity_completions(["https://example.invalid/activity"], "quiz")
+    assert course.attendance_records == {} and len(course.scrape_problems) == 1

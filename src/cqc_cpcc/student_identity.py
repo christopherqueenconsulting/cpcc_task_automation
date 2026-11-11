@@ -5,7 +5,7 @@ Attendance used to join BrightSpace activity to MyColleges by name text, which c
 student or none. The BrightSpace classlist lists every learner with their name, their Org Defined ID
 (the id MyColleges uses) and an internal BrightSpace user id. Activity rows carry that same internal
 user id, so the join is exact: activity row -> user id -> classlist row -> Org Defined ID -> MyColleges.
-Names are only a cross-check and a last resort when a row carries no user id.
+Names are only a cross-check: a row without a trustworthy user id is unresolved and never recorded.
 
 Privacy rules (the owner's, 2026-11-11):
 * The name/id table lives only in a :class:`Classlist` object for the length of one run. It is never
@@ -154,6 +154,12 @@ class Classlist:
 def build_classlist(rows: Iterable[dict]) -> Classlist:
     """A :class:`Classlist` from rows ``{"user": ..., "org": ..., "name": ...}``; a bad row raises ValueError."""
     classlist = Classlist()
-    for row in rows:
-        classlist.add(row.get("user"), row.get("org"), row.get("name"))
+    try:
+        for row in rows:
+            classlist.add(row.get("user"), row.get("org"), row.get("name"))
+    except BaseException:
+        # Rows added before the bad one are already registered with the log redactor: forget them, so a
+        # rejected classlist leaves nothing behind.
+        classlist.clear()
+        raise
     return classlist

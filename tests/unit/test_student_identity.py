@@ -198,3 +198,25 @@ class TestSessionOnlyAndLogs:
         pii_redaction.clear_registry()
         pii_redaction.register_student("Ann Marie Adams", student_id="1000001", alias_key="1000001")
         assert pii_redaction.alias("1000001") == first
+
+
+class TestARejectedClasslistLeavesNothingBehind:
+    def test_build_classlist_forgets_the_rows_registered_before_the_bad_one(self):
+        rows = [{"user": "101", "org": "1000001", "name": "Adams, Ann"},
+                {"user": "102", "org": "1000002", "name": "Brown, Bob"},
+                {"user": "101", "org": "1000009", "name": "Clark, Cid"}]  # user id 101 again with another org id
+        with pytest.raises(ValueError):
+            build_classlist(rows)
+        assert pii_redaction._known_names == {} and pii_redaction._known_tokens == {}
+        assert pii_redaction._known_patterns == [] and pii_redaction._pattern_key == {}
+        assert "Adams" in pii_redaction.scrub("Adams, Ann 1000001 101")  # nothing is registered any more
+
+    def test_a_non_value_error_also_clears(self):
+        class Boom(dict):
+            def get(self, *_a):
+                raise KeyboardInterrupt
+
+        rows = [{"user": "101", "org": "1000001", "name": "Adams, Ann"}, Boom()]
+        with pytest.raises(KeyboardInterrupt):
+            build_classlist(rows)
+        assert pii_redaction._known_names == {} and pii_redaction._known_tokens == {}

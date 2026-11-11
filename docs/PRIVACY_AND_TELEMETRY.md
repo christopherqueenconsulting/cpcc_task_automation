@@ -56,7 +56,9 @@ traceback before anything is written.
   under an alias keyed by the Org Defined ID, and afterwards logs carry only that
   alias (no names, ids or id fragments). A row that cannot be tied to exactly one
   classlist learner keeps the course incomplete. Other places student ids persist
-  by design and predate this: the attendance ledger (`~/.cqc_cpcc/attendance.sqlite3`,
+  by design and predate this: other registrations with the log redactor (the
+  withdrawals list, submission folders, grading) last for the process, since only the
+  classlist's are scoped and dropped; the attendance ledger (`~/.cqc_cpcc/attendance.sqlite3`,
   ids and dates, no names) and the `0600` missing-entry CSV a dry run writes (ids,
   dates, course). Log files keep stable aliases across runs and are pruned after
   the configured retention days.
