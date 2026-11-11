@@ -362,9 +362,9 @@ class WriteMatch:
 
 
 # Submission folders are "<userId>-<dropboxId> - Name ..." and the userId equals the
-# `feedback,<userId>` token on the learner's name link. VERIFIED LIVE 2026-07-10 and again
-# 2026-11-11: 20 of 20 folders carried a userId present on the page, and a name match
-# pointed at the same learner in all 20 (0 conflicts). Same join the attendance code uses
+# `feedback,<userId>` token on the learner's name link. VERIFIED LIVE 2026-07-10; observed
+# again 2026-11-11 in the owner's run (no artifact kept): 20 of 20 folders carried a userId
+# present on the page, and a name match pointed at the same learner in all 20 (0 conflicts). Same join the attendance code uses
 # (student_identity): the user id, never the name, decides who is who.
 _LEADING_USER_ID_RE = re.compile(r"^\s*(\d+)\s*-")
 
@@ -710,16 +710,18 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
     """Assignment route: open each student's evaluation page from the submissions list.
 
     Navigation VERIFIED LIVE 2026-07-01: learners + userIds are scraped from the
-    dropbox submissions page (name-link onclick ``feedback,<userId>``), matched by
-    normalized name, and each evaluation page is opened by clicking that name link.
-    In dry-run we open the page and LOCATE the score/feedback fields but write
-    nothing. The actual fill + Save-as-draft click is still guarded by ``dry_run``.
+    dropbox submissions page (name-link onclick ``feedback,<userId>``), matched to the
+    grade items by BrightSpace user id first and by normalized name second
+    (:func:`match_items_to_learners`), and each evaluation page is opened by clicking
+    that name link. In dry-run we open the page and LOCATE the score/feedback fields but
+    write nothing. The actual fill + Save-as-draft click is still guarded by ``dry_run``.
 
-    In ATTACH mode the assignment route first delivers all clean feedback ``.docx``
-    files in one bulk "Add Feedback Files" ZIP import (matched to submitters by the
-    leading submission-ID; see :func:`_import_assignment_feedback_docs`), then opens
-    each student's evaluation page to write the score and rubric levels (no inline
-    feedback) and Save Draft.
+    In ATTACH mode each student's evaluation page is opened first to write the score and
+    rubric levels (no inline feedback) and Save Draft. Then, for the learners that are not
+    already published, all clean feedback ``.docx`` files go out in one bulk "Add Feedback
+    Files" ZIP whose folders are rebuilt as ``<userId>-<dropboxId> - <name>`` from the
+    matched learner and the ``db=`` of ``url`` (see :func:`_import_assignment_feedback_docs`),
+    and each learner's page is checked for ``Feedback.docx`` afterwards.
     """
     from cqc_cpcc.utilities.brightspace_fetch import _open_and_login, _set_max_results_per_page
 
@@ -2056,15 +2058,13 @@ def _attach_feedback_file(driver, path: str, progress=_noop) -> bool:
 # Assignment bulk feedback import ("Add Feedback Files")
 # ---------------------------------------------------------------------------
 # The dropbox submissions page has a header button, "Add Feedback Files", that
-# accepts a single ZIP and distributes each contained file to the matching
-# submitter as DRAFT feedback. VERIFIED LIVE 2026-07-10 (folder ou=200002 db=600002):
-# BrightSpace matches a feedback file to a student PURELY by the leading numeric
-# submission-ID in its enclosing folder name — the SAME ID-bearing folder name the
-# submissions download produced (e.g. "100003-600002 - Ben Sample - Jul 7, 2026").
-# So this route delivers all clean feedback .docx files in ONE upload, no per-student
-# navigation. It only works for SUBMITTERS (a non-submitter has no download ID and is
-# silently skipped by BrightSpace). Scores/rubric are then written per student by
-# _push_assignment_grades (feedback_mode="none").
+# accepts a single ZIP and distributes each contained file to the matching submitter as
+# DRAFT feedback, so all clean feedback .docx files go out in ONE upload with no
+# per-student navigation. BrightSpace matches a file on its ZIP folder name, which must be
+# "<userId>-<dropboxId> - <name>" (see the BULK FEEDBACK ZIP FORMAT block below); a bare
+# name or an id alone is not matched. It only works for SUBMITTERS. The import runs AFTER
+# the per-student pass in _push_assignment_grades, which writes scores and rubric levels
+# with feedback_mode="none" and leaves published learners out of the ZIP.
 def build_feedback_docs_zip(feedback_docs: dict, out_path: Optional[str] = None, *,
                             folder_names: Optional[dict] = None,
                             file_name: Optional[str] = None) -> Optional[str]:
@@ -2102,7 +2102,9 @@ def build_feedback_docs_zip(feedback_docs: dict, out_path: Optional[str] = None,
         os.close(fd)
     with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for student_key, path in entries:
-            folder = (folder_names or {}).get(student_key, student_key)
+            folder = (folder_names or {}).get(student_key)
+            if folder is None:      # legacy fallback: never let a raw key add a path
+                folder = re.sub(r'[\\/:*?"<>|]+', " ", str(student_key)).strip(" .") or "feedback"
             zf.write(path, f"{folder}/{file_name or os.path.basename(path)}")
     return out_path
 
@@ -2112,7 +2114,8 @@ def build_feedback_docs_zip(feedback_docs: dict, out_path: Optional[str] = None,
 # BrightSpace's dropbox "Add Feedback Files" says "Upload compressed zip file in the same
 # format that it was downloaded". The download is: a top-level index.html plus one folder per
 # submission named "<userId>-<dropboxId> - <name> - <date time>/" holding the student's files.
-# VERIFIED LIVE 2026-11-11 (one learner, a throwaway .docx per variant, DRAFT feedback only):
+# OBSERVED LIVE 2026-11-11 in the owner's run (one learner, a throwaway .docx per variant, DRAFT
+# feedback only; the raw logs hold student data, so no artifact is kept in this public repo):
 #
 #   ZIP folder                                          result
 #   "<userId>-<dropboxId> - <name> - <date time>/"      attached  (the download's own name)
@@ -2202,7 +2205,7 @@ _IMPORT_ERROR_RE = re.compile(
     re.I)
 
 # File names of the feedback attachments on an evaluation page: one "Remove Attachment:
-# <file>" control per attached file, crossing shadow roots. VERIFIED LIVE 2026-11-11: a page
+# <file>" control per attached file, crossing shadow roots. OBSERVED LIVE 2026-11-11: a page
 # with an attached feedback .docx shows exactly this control; one without shows none.
 _FEEDBACK_ATTACHMENT_NAMES_JS = r"""
 function* deep(root){
@@ -2366,6 +2369,9 @@ def import_feedback_zip(driver, zip_path: str, progress=_noop) -> bool:
         # BrightSpace unpacks the ZIP server-side ("Processing Extracted Files... Loading...",
         # seen live 2026-11-11); leaving before it finishes may cancel the import.
         said = _wait_import_done(driver)
+        if isinstance(said, str) and _IMPORT_BUSY_RE.search(said):
+            progress("bulk import: the dialog was still processing when the wait ended; "
+                     "each learner's page is checked next")
         # Record what the dialog says after Add (diagnostic) and refuse an error message.
         if isinstance(said, str) and said.strip():
             progress(f"bulk import dialog after Add: {said.strip()[:200]}")
@@ -2436,42 +2442,48 @@ def _import_assignment_feedback_docs(driver, url, items, doc_items, report,
             ))
         return report
 
-    ok = True
-    if dry_run:
-        progress(
-            f"Would bulk-import {len(available_doc_items)} feedback doc(s) as draft; "
-            "Add Feedback Files control found (dry run; nothing uploaded)"
-        )
-    else:
-        progress(f"Bulk-importing {len(available_doc_items)} feedback doc(s) via 'Add Feedback Files'...")
-        ok = import_feedback_zip(driver, zip_path, progress)
-
-    for it in items:
-        has_doc = it.student_key in available_keys
-        outcome = StudentWriteOutcome(
-            student_key=it.student_key, display_name=it.display_name,
-            matched=has_doc, fields_found=has_doc and upload_control,
-        )
-        if not has_doc:
-            outcome.note = "no feedback doc to import"
-        elif dry_run:
-            outcome.note = (
-                "dry run — DOCX available; Add Feedback Files control found; "
-                "would import as draft (nothing uploaded)"
+    # The ZIP holds every learner's name, user id and feedback: never leave it in the temp dir.
+    try:
+        ok = True
+        if dry_run:
+            progress(
+                f"Would bulk-import {len(available_doc_items)} feedback doc(s) as draft; "
+                "Add Feedback Files control found (dry run; nothing uploaded)"
             )
-        elif ok:
-            outcome.feedback_attached = True
-            outcome.saved = True
-            outcome.note = "feedback doc imported as draft"
         else:
-            outcome.note = "feedback doc import failed"
-        report.outcomes.append(outcome)
+            progress(f"Bulk-importing {len(available_doc_items)} feedback doc(s) via 'Add Feedback Files'...")
+            ok = import_feedback_zip(driver, zip_path, progress)
 
-    if not dry_run and not ok:
-        report.warnings.append(
-            "The 'Add Feedback Files' bulk import did not complete — "
-            "no feedback docs were distributed.")
-    return report
+        for it in items:
+            has_doc = it.student_key in available_keys
+            outcome = StudentWriteOutcome(
+                student_key=it.student_key, display_name=it.display_name,
+                matched=has_doc, fields_found=has_doc and upload_control,
+            )
+            if not has_doc:
+                outcome.note = "no feedback doc to import"
+            elif dry_run:
+                outcome.note = (
+                    "dry run — DOCX available; Add Feedback Files control found; "
+                    "would import as draft (nothing uploaded)"
+                )
+            elif ok:
+                outcome.feedback_attached = True
+                outcome.saved = True
+                outcome.note = "feedback doc imported as draft"
+            else:
+                outcome.note = "feedback doc import failed"
+            report.outcomes.append(outcome)
+
+        if not dry_run and not ok:
+            report.warnings.append(
+                "The 'Add Feedback Files' bulk import did not complete — "
+                "no feedback docs were distributed.")
+        return report
+    finally:
+        import contextlib
+        with contextlib.suppress(OSError):
+            os.remove(zip_path)
 
 
 def _write_one_quiz_student(driver, wait, item: GradeWriteItem, outcome: StudentWriteOutcome,

@@ -1389,14 +1389,14 @@ def test_open_assignment_evaluation_clicks_name_link_or_skips(mocker):
     wait = MagicMock()
     url = "https://bs/d2l/lms/dropbox/admin/mark/folder_submissions_users.d2l?db=1&ou=2"
 
-    ok = wb._open_assignment_evaluation(driver, wait, url, {"name": "Jane Doe", "userId": "117059"})
+    ok = wb._open_assignment_evaluation(driver, wait, url, {"name": "Jane Doe", "userId": "100003"})
     assert ok is True
     # navigated to the per-user view (name links live only there)
     dest = driver.get.call_args[0][0]
     assert "folder_submissions_users.d2l" in dest and "ou=2" in dest and "db=1" in dest
     # located the name link by its feedback,<userId> onclick, then clicked it
     xpath = driver.find_element.call_args[0][1]
-    assert "feedback,117059" in xpath and "EvaluateDropboxSubmission" in xpath
+    assert "feedback,100003" in xpath and "EvaluateDropboxSubmission" in xpath
     driver.find_element.return_value.click.assert_called_once()
 
     # no userId -> skip without navigating

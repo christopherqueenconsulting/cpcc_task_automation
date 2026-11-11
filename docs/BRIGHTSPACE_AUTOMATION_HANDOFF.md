@@ -354,7 +354,7 @@ Duplicate Files" checked → wait for "Processing Extracted Files..." to end),
 page is `d2l-button-icon` with aria-label `"Remove Attachment: <filename>"` inside
 `d2l-consistent-evaluation-attachments-editor`.
 
-### Bulk feedback ZIP format (VERIFIED LIVE 2026-11-11; pinned by `tests/unit/test_bulk_feedback_zip_format.py`)
+### Bulk feedback ZIP format (observed live 2026-11-11; pinned by `tests/unit/test_bulk_feedback_zip_format.py`)
 
 **The failure this explains.** A full-class run reported "feedback doc imported as draft" for
 all 20 learners and attached nothing. BrightSpace's dialog says *"Upload compressed zip file in
@@ -367,10 +367,10 @@ date. A ZIP of `<name>/<file>` matches no one, and the old code never looked at 
 submission named `<userId>-<dropboxId> - <name> - <date time>/`, e.g.
 `100003-900 - Ben Sample - Nov 8, 2026 6:10 PM/` (synthetic). `<userId>` is the BrightSpace user
 id, the same number as the `feedback,<userId>` token on the learner's link (20 of 20 folders
-equalled a user id on the page; the name match agreed in all 20). `<dropboxId>` is the `db=` of
+equalled a user id on the page; the name match agreed in all 20; owner's run, no artifact kept). `<dropboxId>` is the `db=` of
 the assignment URL, not a per-student submission id.
 
-**What an upload must look like** (one learner, a throwaway `.docx` per variant, draft only):
+**What an upload must look like** (observed live in the owner's run on 2026-11-11: one learner, a throwaway `.docx` per variant, draft only. The raw run logs hold student data, so no artifact is kept in this public repo; the unit tests pin the result):
 
 | ZIP folder | Result |
 |---|---|
@@ -408,6 +408,17 @@ folder name"; uploads become draft feedback; the import works only for learners 
 a file and, per one source, only for the current results page (at most 200); it does not work
 with Anonymous Grading. Not found anywhere: whether the date suffix is required (our test says
 no), what `index.html` contains, size or file-type limits.
+
+**Undo.** The import only adds DRAFT feedback: nothing is published and no grade changes.
+1. *Remove a wrong or unwanted import, per learner:* open the evaluation page and click
+   `Remove Attachment: Feedback.docx`. There is no bulk undo.
+2. *"Overwrite Duplicate Files"* replaces an existing `Feedback.docx` on that learner and
+   BrightSpace keeps no earlier copy, so keep the originals if you may need them back.
+   Re-running after a failed or partial import is safe: it replaces, never duplicates.
+3. *A grade that did not hold:* a draft stays unpublished, so retype it by hand or re-run. With
+   "Update published grades" ticked the score it replaced is recorded (`outcome.previous_score`,
+   the republished-scores record); restore it by hand.
+4. *Revert the code:* `git revert` the merge commit. The generated ZIP is deleted after every run.
 
 **Never change the folder shape without a one-learner live test** (a throwaway file, an
 assignment you can write a draft on, then "Remove Attachment"). Update the table above and the

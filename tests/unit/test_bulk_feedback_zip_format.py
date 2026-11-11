@@ -4,7 +4,7 @@ These tests memorialise a live finding. Do not loosen them without a one-learner
 (see docs/BRIGHTSPACE_AUTOMATION_HANDOFF.md, "Bulk feedback ZIP format").
 
 BrightSpace says "Upload compressed zip file in the same format that it was downloaded".
-Verified live on 2026-11-11 (one learner, a throwaway .docx per variant, draft only):
+Observed live on 2026-11-11 in the owner's run (one learner, a throwaway .docx per variant, draft only):
 
     ZIP folder                                           result
     "<userId>-<dropboxId> - <name> - <date time>/"       attached (the download's own name)
@@ -177,3 +177,59 @@ def test_an_attached_import_is_confirmed_by_the_file_name_on_the_learners_page(m
     assert wb._wait_for_feedback_attachment(driver, timeout=1, name=wb.BULK_FEEDBACK_FILE_NAME)
     driver.execute_script.return_value = ["Some_Other_File.docx"]
     assert not wb._wait_for_feedback_attachment(driver, timeout=1, name=wb.BULK_FEEDBACK_FILE_NAME)
+
+
+# ---- the generated ZIP holds student names, ids and feedback: it must not be left behind ----
+
+def _push_inputs(tmp_path, mocker):
+    doc = tmp_path / "f.docx"; doc.write_bytes(b"x")
+    mocker.patch.object(wb, "_locate_add_feedback_files_control", return_value=True)
+    item = wb.GradeWriteItem("Ben Sample", "Ben Sample", 80, 90, 100, "<p/>", feedback_doc_path=str(doc))
+    return item, {"Ben Sample": wb.bulk_feedback_folder_name("100003", DROPBOX, "Ben Sample")}
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("dry_run,import_result", [(True, True), (False, True), (False, False)])
+def test_the_generated_zip_is_deleted_on_every_path(mocker, tmp_path, dry_run, import_result):
+    import os
+    item, folders = _push_inputs(tmp_path, mocker)
+    seen: dict = {}
+    real_build = wb.build_feedback_docs_zip
+
+    def spy(*a, **k):
+        seen["path"] = real_build(*a, **k)
+        return seen["path"]
+    mocker.patch.object(wb, "build_feedback_docs_zip", side_effect=spy)
+    mocker.patch.object(wb, "import_feedback_zip", return_value=import_result)
+    wb._import_assignment_feedback_docs(
+        MagicMock(), "url", [item], [item], wb.GradeWriteReport("assignment", dry_run),
+        lambda *_: None, dry_run=dry_run, folder_names=folders)
+    assert seen["path"] and not os.path.exists(seen["path"])
+
+
+@pytest.mark.unit
+def test_the_generated_zip_is_deleted_when_the_import_raises(mocker, tmp_path):
+    import os
+    item, folders = _push_inputs(tmp_path, mocker)
+    seen: dict = {}
+    real_build = wb.build_feedback_docs_zip
+
+    def spy(*a, **k):
+        seen["path"] = real_build(*a, **k)
+        return seen["path"]
+    mocker.patch.object(wb, "build_feedback_docs_zip", side_effect=spy)
+    mocker.patch.object(wb, "import_feedback_zip", side_effect=RuntimeError("driver died"))
+    with pytest.raises(RuntimeError):
+        wb._import_assignment_feedback_docs(
+            MagicMock(), "url", [item], [item], wb.GradeWriteReport("assignment", False),
+            lambda *_: None, dry_run=False, folder_names=folders)
+    assert not os.path.exists(seen["path"])
+
+
+@pytest.mark.unit
+def test_the_legacy_fallback_folder_cannot_add_a_path(tmp_path):
+    """Without folder_names the raw key is the folder: it must not be able to climb or nest."""
+    doc = tmp_path / "d.docx"; doc.write_bytes(b"x")
+    z = wb.build_feedback_docs_zip({"../../etc/Ben Sample": str(doc)}, str(tmp_path / "o.zip"))
+    [entry] = zipfile.ZipFile(z).namelist()
+    assert ".." not in entry.split("/") and entry.count("/") == 1
