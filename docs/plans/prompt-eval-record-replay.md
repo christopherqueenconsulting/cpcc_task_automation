@@ -1,6 +1,6 @@
 # Prompt eval: record and replay for response-side changes (issue #406)
 
-Status: steps 1 to 3 and 5 are in (tools and docs). No workflow calls any of it yet (S4, the owner's merge).
+Status: steps 1 to 3 and 5 are in (tools and docs). S4 (workflow wiring, the owner's merge) is drafted in a pull request and off by default.
 
 ## Problem
 
@@ -49,7 +49,7 @@ raw-responses/<request-key>.json
 - Serialization is deterministic (sorted keys, compact separators, UTF-8, trailing newline), so two
   records of equal bodies are equal bytes.
 - Size: one case is a few KB of text, so a suite's directory is small next to the saved outputs.
-  S4 measures this on a real artifact and sets a cap before the workflow uploads it.
+  S4 ships a placeholder cap (`MAX_KB` 20480, not measured); set it from the first real artifact.
 - Data: bodies hold the model's answer to a synthetic eval case. The eval datasets are synthetic and
   `scripts/pii_guard.py` still runs on the repo, but the artifact is a CI artifact, not a commit.
   S2 confirms no real student text can reach a captured request: `record_replay.recording` calls
@@ -122,7 +122,7 @@ Each step is sized for one 20-minute run.
   command `prompt-ab-replay --suites S --ab-dir DIR --out OUT` writes `OUT/replay.json`
   (`{"status": "identical" | "different" | "unusable", "suites": {...}}`) and exits 0, 3 or 4 respectively. `DIR` is
   the base's A/B artifact: `raw-responses/` and `base/<suite>/raw_outputs.jsonl`. The status file is `replay.json`,
-  not `ab.json`: the real A/B artifact keeps its name, and S4 decides how `prompt-ab-decide` reads the replay.
+  not `ab.json`: the real A/B artifact keeps its name, and S4 does not feed it to `prompt-ab-decide`: the decision lives only in the `detect` job's fast-path step, which can only clear the capture's result.
   Concurrency is resolved by comparing a case's repeats as a sorted group (the base's repeats and the head's replayed
   repeats hold the same multiset of answers whatever order concurrent calls took). `different` and `unusable`
   both mean "run the full paid A/B"; only `identical` on every suite can pass. Batch mode, a dataset that is not
@@ -130,14 +130,18 @@ Each step is sized for one 20-minute run.
   differ from the base run's and any other error are `unusable`; replay runs without a spend cap (it makes no paid call). Recording refuses a store
   that already holds answers, so a store only ever holds one run. Unit tests use synthetic stores and a
   fake `prompt_eval.run`; nothing calls a model or reads a key.
-- **S4, workflow wiring (the owner's merge):** `.github/workflows` changes: upload and download
-  `raw-responses/`, run the replay step after the request-identical check, and a repository variable
-  switch like `PROMPT_EVAL_FAST_PATH`. Follows `GitHub-Actions-Standard` (timeouts, no path filter on a
-  required check). Christopher merges.
+- [ ] **S4, workflow wiring (the owner's merge):** `.github/workflows/prompt-eval.yml`, behind the repository
+  variable `PROMPT_EVAL_REPLAY` (unset = off, `report`, `on`). Drafted, not merged. A `record-raw` job on master pushes
+  records each suite the push runs once more (no judges, one store per suite, `pii_guard` scan, size cap, artifact
+  `prompt-eval-raw-<run id>`); `detect` replays a request-identical PR on the newest record that is in the base's
+  history; the `report` job prints fixed words from `replay-summary.json`; with `on` anything but `identical` on
+  every suite turns the fast path off. It follows `GitHub-Actions-Standard` (a timeout on every job, a step timeout on the replay and Java steps of `detect`, no path filter on a required check). Open for the owner: the second paid run it adds on master (the
+  recording cannot reuse the history run, which uses judges), the size cap (placeholder, unmeasured),
+  and `report` first, `on` later. Christopher merges.
 - [x] **S5, docs:** `docs/PROMPTS.md` section "Record and replay for response-side changes" replaces the "Not
   covered: record-and-replay" line with the artifact layout, the commands, the exit codes and the fallback
   behaviour, and says plainly that no workflow runs it yet. The CHANGELOG entry describes the tools as built
   and not wired.
 
-S4 is not started: it changes `.github/workflows` (a protected path) and is the owner's merge. S1 to S3 and S5 are in
+S4 changes `.github/workflows` (a protected path) and is the owner's merge. S1 to S3 and S5 are in
 the tools-only pull request; issue #406 stays open until S4 lands.
