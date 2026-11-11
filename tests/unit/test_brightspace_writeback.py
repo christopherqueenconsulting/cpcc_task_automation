@@ -1224,6 +1224,7 @@ def _published_page(mocker):
     mocker.patch.object(wb, "_write_feedback_via_editor", return_value=True)
     mocker.patch.object(wb, "_fill_score", return_value=True)
     mocker.patch.object(wb, "_ensure_score_committed", return_value=True)
+    mocker.patch.object(wb, "_read_score_value", return_value="75")
     return (mocker.patch.object(wb, "_save_draft", return_value=True),
             mocker.patch.object(wb, "_click_commit", return_value=True))
 
@@ -1248,8 +1249,9 @@ def test_write_one_student_updates_published_learner_when_opted_in(mocker):
     wb._write_one_student(MagicMock(), MagicMock(), item, o, lambda *_: None,
                           dry_run=False, update_published=True)
     assert o.saved and o.score_written == 90 and o.note.startswith("updated")
+    assert "previous score 75" in o.note and o.previous_score == "75"
     save.assert_not_called()                     # never Save Draft on a published page
-    assert commit.call_count == 2                # feedback cycle + score cycle
+    assert commit.call_count == 1                # ONE Update, after the score is verified
     for call in commit.call_args_list:
         include, exclude = call.args[1], call.args[2]
         assert include == ("update",)
@@ -1276,3 +1278,47 @@ def test_locate_update_never_matches_retract_or_publish():
     _, include, exclude = driver.execute_script.call_args.args
     assert include == ["update"]
     assert "retract" in exclude and "publish" in exclude
+
+
+@pytest.mark.unit
+def test_write_one_student_never_updates_published_when_score_not_committed(mocker):
+    save, commit = _published_page(mocker)
+    mocker.patch.object(wb, "_ensure_score_committed", return_value=False)
+    o = wb.StudentWriteOutcome("k", "Jane", matched=True)
+    item = wb.GradeWriteItem("k", "Jane", 80, 90, 100, "<p>fb</p>")
+    wb._write_one_student(MagicMock(), MagicMock(), item, o, lambda *_: None,
+                          dry_run=False, update_published=True)
+    commit.assert_not_called()
+    save.assert_not_called()
+    assert not o.saved and "Update not clicked" in o.note
+
+
+@pytest.mark.unit
+def test_push_assignment_attach_skips_bulk_import_for_published_learners(mocker, tmp_path):
+    """A published learner (Update not opted in) must not get a feedback doc imported."""
+    pub_doc = tmp_path / "a.docx"; pub_doc.write_bytes(b"x")
+    new_doc = tmp_path / "b.docx"; new_doc.write_bytes(b"x")
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._open_and_login")
+    mocker.patch("cqc_cpcc.utilities.brightspace_fetch._set_max_results_per_page")
+    mocker.patch("cqc_cpcc.utilities.selenium_util.wait_for_ajax")
+    mocker.patch.object(wb, "_gather_assignment_learners", return_value=[
+        {"name": "Ann Pub", "userId": "1"}, {"name": "Bo New", "userId": "2"}])
+    mocker.patch.object(wb, "_open_assignment_evaluation", return_value=True)
+
+    def fake_write(driver, wait, item, outcome, *a, **k):
+        outcome.already_published = item.display_name == "Ann Pub"
+        outcome.note = "x"
+    mocker.patch.object(wb, "_write_one_student", side_effect=fake_write)
+    bulk = mocker.patch.object(wb, "_import_assignment_feedback_docs",
+                               return_value=wb.GradeWriteReport("assignment", False))
+    items = [wb.GradeWriteItem("1-1 - Ann Pub", "Ann Pub", 80, 90, 100, "<p/>",
+                               feedback_doc_path=str(pub_doc)),
+             wb.GradeWriteItem("2-2 - Bo New", "Bo New", 80, 90, 100, "<p/>",
+                               feedback_doc_path=str(new_doc))]
+    report = wb._push_assignment_grades(MagicMock(), MagicMock(), "url", items,
+                                        lambda *_: None, None, dry_run=False,
+                                        feedback_mode="attach")
+    imported = bulk.call_args.args[2]
+    assert [it.display_name for it in imported] == ["Bo New"]
+    ann = next(o for o in report.outcomes if o.display_name == "Ann Pub")
+    assert "not imported (already published)" in ann.note

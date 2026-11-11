@@ -5,7 +5,9 @@
 This is the inverse of :mod:`cqc_cpcc.utilities.brightspace_fetch`: after the web app
 grades each student, this module pushes the computed score + feedback onto each
 student's BrightSpace evaluation page and **saves it as a draft** so the instructor
-reviews and publishes later. It NEVER clicks Publish.
+reviews and publishes later. It NEVER clicks Publish or Retract. The one exception is
+opt-in: with ``update_published=True`` a learner whose grade is already published is
+saved with **Update**, which republishes the change to that student at once.
 
 Two layers, deliberately separated so the risky part is small and the rest is pure:
 
@@ -455,6 +457,7 @@ class StudentWriteOutcome:
     rubric_selected: int = 0            # rubric levels selected (or matched, in dry-run)
     rubric_missing: list = field(default_factory=list)  # [{criterion, level, reason}]
     already_published: bool = False     # page offered Update/Retract, not Save Draft
+    previous_score: Optional[str] = None  # score on the page before an Update overwrote it
     note: str = ""
 
 
@@ -691,23 +694,11 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
     # Gate attach on files that actually EXIST on disk (a truthy-but-stale temp path
     # otherwise produced an empty report that looked like a total failure).
     doc_items = [it for it in items if it.feedback_doc_path and os.path.exists(it.feedback_doc_path)]
-    bulk_by_key: dict = {}
-    if feedback_mode == "attach":
-        # Feedback docs go out in ONE bulk "Add Feedback Files" import; scores and rubric
-        # levels are then written per student below (the import writes no scores).
-        if doc_items:
-            bulk = _import_assignment_feedback_docs(
-                driver, url, items, doc_items,
-                GradeWriteReport(route="assignment", dry_run=dry_run,
-                                 feedback_mode=feedback_mode),
-                progress, dry_run)
-            report.warnings.extend(bulk.warnings)
-            bulk_by_key = {o.student_key: o for o in bulk.outcomes}
-        else:
-            report.warnings.append(
-                "Attach mode: no feedback .docx files were found on disk, so no feedback "
-                "was delivered. Re-generate the feedback documents above and retry, or "
-                "switch “Feedback delivery” to “Add feedback directly”.")
+    if feedback_mode == "attach" and not doc_items:
+        report.warnings.append(
+            "Attach mode: no feedback .docx files were found on disk, so no feedback "
+            "was delivered. Re-generate the feedback documents above and retry, or "
+            "switch “Feedback delivery” to “Add feedback directly”.")
 
     # Learner name links (feedback,<userId>) live ONLY on the per-user submissions view;
     # _open_and_login's Submissions-tab click lands on the per-file view. Force the
@@ -737,20 +728,46 @@ def _push_assignment_grades(driver, wait, url, items, progress, mfa_handler, dry
         outcome = StudentWriteOutcome(
             student_key=m.item.student_key, display_name=m.item.display_name, matched=True,
         )
-        bulk_outcome = bulk_by_key.get(m.item.student_key)
-        if bulk_outcome is not None:
-            outcome.feedback_attached = bulk_outcome.feedback_attached
         if not _open_assignment_evaluation(driver, wait, url, m.learner):
             outcome.note = "could not open evaluation page"
             report.outcomes.append(outcome)
             continue
-        # Attach mode: feedback already went out in the bulk import -> score/rubric only.
+        # Attach mode: feedback goes out in the bulk import below -> score/rubric only here.
         _write_one_student(driver, wait, m.item, outcome, progress, dry_run,
                            "none" if feedback_mode == "attach" else feedback_mode,
                            update_published=update_published)
-        if bulk_outcome is not None and bulk_outcome.note:
-            outcome.note = f"{outcome.note}; feedback doc: {bulk_outcome.note}"
         report.outcomes.append(outcome)
+
+    if feedback_mode == "attach" and doc_items:
+        # Bulk import runs AFTER the per-student pass so it can leave out learners whose
+        # grade is already published (unless the instructor opted into Update): the
+        # import would otherwise change feedback a student can already see.
+        skipped = {o.student_key for o in report.outcomes
+                   if o.already_published and not update_published}
+        import_items = [it for it in doc_items if it.student_key not in skipped]
+        bulk_by_key: dict = {}
+        if import_items:
+            try:
+                driver.get(users_url)
+                wait_for_ajax(driver)
+            except Exception as e:  # noqa: BLE001
+                logger.info("Could not return to submissions view for import: %s", e)
+            bulk = _import_assignment_feedback_docs(
+                driver, url, import_items, import_items,
+                GradeWriteReport(route="assignment", dry_run=dry_run,
+                                 feedback_mode=feedback_mode),
+                progress, dry_run)
+            report.warnings.extend(bulk.warnings)
+            bulk_by_key = {o.student_key: o for o in bulk.outcomes}
+        for outcome in report.outcomes:
+            if outcome.student_key in skipped:
+                outcome.note += "; feedback doc: not imported (already published)"
+                continue
+            b = bulk_by_key.get(outcome.student_key)
+            if b is not None:
+                outcome.feedback_attached = b.feedback_attached
+                if b.note:
+                    outcome.note = f"{outcome.note}; feedback doc: {b.note}"
     return report
 
 
@@ -1285,7 +1302,22 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
         # in flight) and Save Draft again. The score field is a D2L Lit <d2l-input-text>
         # that ignores the JS native-value setter, so we type with REAL keystrokes
         # (_fill_score) and blur+verify (_ensure_score_committed) before saving.
-        if attach or skip_feedback:
+        if published:
+            # Update republishes at once, so click it ONCE and only after the score is
+            # verified in the field. Record the score it replaces so it can be restored.
+            outcome.previous_score = _read_score_value(driver)
+            if attach:
+                outcome.feedback_attached = _attach_feedback_file(
+                    driver, item.feedback_doc_path, progress)
+            elif not skip_feedback:
+                outcome.feedback_written = _write_feedback_via_editor(
+                    driver, wait, item.feedback_html)
+                _t.sleep(1.5)  # let the editor commit settle before the score is typed
+            _fill_score(driver, item.score)
+            if _ensure_score_committed(driver, item.score):
+                outcome.score_written = item.score
+                outcome.saved = commit()
+        elif attach or skip_feedback:
             # No editor race here — (attach the .docx,) set score, single save.
             if attach:
                 outcome.feedback_attached = _attach_feedback_file(
@@ -1307,8 +1339,12 @@ def _write_one_student(driver, wait, item: GradeWriteItem, outcome: StudentWrite
             outcome.saved = commit()
 
         if published:
-            outcome.note = ("updated (republished to student)" if outcome.saved
-                            else "filled but Update click failed — NOT saved")
+            was = f"; previous score {outcome.previous_score or '(blank)'}"
+            if outcome.score_written is None:
+                outcome.note = "score not committed — Update not clicked" + was
+            else:
+                outcome.note = ("updated (republished to student)" if outcome.saved
+                                else "filled but Update click failed — NOT saved") + was
         else:
             outcome.note = ("saved as draft" if outcome.saved
                             else "filled but Save Draft not found — NOT saved")
@@ -1483,6 +1519,16 @@ for(const sel of SELS){
 }
 return null;
 """
+
+
+def _read_score_value(driver) -> Optional[str]:
+    """Current value of the overall score input, or None when it cannot be read."""
+    try:
+        el = driver.execute_script(_FIND_SCORE_INPUT_JS, list(SCORE_INPUT_SELECTORS))
+        return (el.get_attribute("value") or "").strip() if el is not None else None
+    except Exception as e:  # noqa: BLE001
+        logger.info("Score value read failed: %s", e)
+        return None
 
 
 def _fill_score(driver, score) -> bool:
