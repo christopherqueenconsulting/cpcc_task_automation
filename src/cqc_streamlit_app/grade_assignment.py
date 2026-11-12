@@ -4612,6 +4612,7 @@ def _build_results_report(run_key: str, all_results: list, course_name: str) -> 
         with tmp:
             tmp.write(html_text)
         os.chmod(tmp.name, 0o600)
+        logger.info(f"Results report built: {len(html_text.encode('utf-8')):,} bytes")
         st.session_state.setdefault("results_report_path_by_key", {})[run_key] = tmp.name
         return tmp.name
     except Exception as e:  # noqa: BLE001 - the report is extra; never lose the hand-back ZIP over it

@@ -43,8 +43,9 @@ from cqc_cpcc.utilities.code_preview import (
     runnable_files,
     runner_language,
 )
+from cqc_cpcc.utilities.logger import logger
 from cqc_cpcc.utilities.output_compare import full_unified_diff
-from cqc_streamlit_app import execution_view
+from cqc_streamlit_app import diff_view, execution_view
 
 REPORT_FILENAME = "Results_Report.html"
 #: The diff of one case is computed only below these sizes (the app asks first above them).
@@ -52,6 +53,9 @@ MAX_DIFF_LINES = execution_view.MAX_DIFF_LINES
 MAX_DIFF_CELLS = execution_view.MAX_DIFF_CELLS
 RUNNER_NOTICE = ("Running sends this student's code to onecompiler.com to compile and run it. "
                  "Nothing is sent until you click.")
+#: Side-by-side rows in one whole report. Past it, later cases show the unified diff only, so the
+#: file stays bounded (about 10 MB of rows when every line differs; 2,000 such rows took 0.15 s).
+MAX_REPORT_SIDE_ROWS = 50_000
 NO_CODE_TEXT = "The submitted files were not available when this report was built."
 
 
@@ -81,7 +85,30 @@ def _case_diff(expected: str, actual: str, excerpt: Optional[str]) -> dict:
     return {"kind": "none", "text": ""}
 
 
-def _output(report: Optional[dict], cases: dict) -> Optional[dict]:
+def _case_side(expected: str, actual: str, budget: Optional[list] = None) -> Optional[dict]:
+    """The app's side-by-side rows for one case, inside the same size guard as the full diff;
+    ``None`` when the outputs are equal, missing or too large (the page then shows the unified diff).
+
+    ``budget`` is ``[rows left in this report]``. Once it is spent, the case gets
+    ``{"skipped": True}`` and no rows, without running the alignment."""
+    if not (expected or actual) or expected == actual:
+        return None
+    n, m = expected.count("\n") + 1, actual.count("\n") + 1
+    if n > MAX_DIFF_LINES or m > MAX_DIFF_LINES or n * m > MAX_DIFF_CELLS:
+        return None
+    if budget is not None and budget[0] < max(n, m):
+        return {"skipped": True}
+    rows = diff_view.align_rows(expected, actual)
+    if len(rows) > diff_view.MAX_SIDE_ROWS:
+        return None
+    if budget is not None:
+        if budget[0] < len(rows):
+            return {"skipped": True}
+        budget[0] -= len(rows)
+    return {"rows": [diff_view._row_json(r) for r in rows], "summary": diff_view.summary_text(rows)}
+
+
+def _output(report: Optional[dict], cases: dict, budget: Optional[list] = None) -> Optional[dict]:
     if not isinstance(report, dict):
         return None
     gate = report.get("gate") or {}
@@ -106,6 +133,7 @@ def _output(report: Optional[dict], cases: dict) -> Optional[dict]:
             "actual": clean_block(actual),
             "cut": bool(r.get("output_cut_by_runner")),
             "diff": _case_diff(expected, actual, r.get("diff_excerpt")),
+            "side": _case_side(expected, actual, budget),
         })
     return {
         "status": execution_view._STATUS_TEXT.get(report.get("status"), "Output check status unknown."),
@@ -135,7 +163,7 @@ def _code(source_files: Optional[dict]) -> dict:
 
 
 def _student(student_id: str, result, *, greeting_name, source_files, cases: dict,
-             requirement_texts: dict) -> dict:
+             requirement_texts: dict, budget: Optional[list] = None) -> dict:
     possible = result.total_points_possible or 0
     earned = result.total_points_earned or 0
     counts = result.error_counts_by_severity or {}
@@ -173,7 +201,7 @@ def _student(student_id: str, result, *, greeting_name, source_files, cases: dic
                           "text": requirement_texts.get(r.requirement_id.strip().upper(), ""),
                           "status": r.status, "evidence": r.evidence or ""}
                          for r in (result.requirement_results or [])],
-        "output": _output(result.execution_report, cases),
+        "output": _output(result.execution_report, cases, budget),
         "code": _code(source_files),
     }
 
@@ -202,11 +230,12 @@ def build_report_data(results: list, *, title: str, meta: Optional[dict] = None,
     greeting_names = greeting_names or {}
     source_files_by_student = source_files_by_student or {}
     requirement_texts = requirement_texts or {}
+    budget = [MAX_REPORT_SIDE_ROWS]
     students = [
         _student(sid, result,
                  greeting_name=greeting_names[sid] if sid in greeting_names else sid,
                  source_files=source_files_by_student.get(sid), cases=cases,
-                 requirement_texts=requirement_texts)
+                 requirement_texts=requirement_texts, budget=budget)
         for sid, result in results
     ]
     return {
@@ -219,6 +248,7 @@ def build_report_data(results: list, *, title: str, meta: Optional[dict] = None,
         "runner_origin": ONECOMPILER_ORIGIN,
         "runner_notice": RUNNER_NOTICE,
         "no_code_text": NO_CODE_TEXT,
+        "diff_tags": diff_view.CLASS_TAG,
     }
 
 
@@ -228,7 +258,7 @@ def build_results_report_html(results: list, **kwargs) -> str:
     # Each "<" becomes the JSON escape \u003c, so nothing in a value can end the JSON's script element.
     data_json = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")
     script_hash = base64.b64encode(hashlib.sha256(_SCRIPT.encode("utf-8")).digest()).decode("ascii")
-    csp = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+    csp = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; "
            f"script-src 'sha256-{script_hash}'; frame-src {ONECOMPILER_ORIGIN}; base-uri 'none'; "
            "form-action 'none'")
     values = {"CSP": html.escape(csp, quote=True), "TITLE": html.escape(data["title"]),
@@ -262,10 +292,9 @@ _PAGE = """<!doctype html>
 <main>
   <section id="list">
     <input id="filter" type="search" placeholder="Filter students" aria-label="Filter students">
-    <table id="students"><thead><tr>
-      <th data-sort="id">Student</th><th data-sort="status">Status</th><th data-sort="pct">Score</th>
-      <th data-sort="level">Level</th><th data-sort="major">Major</th><th data-sort="minor">Minor</th>
-      <th data-sort="output_label">Output</th></tr></thead><tbody></tbody></table>
+    <div class="tablewrap"><table id="students"><thead><tr>
+      <th data-sort="id">Student</th><th data-sort="pct">Score</th>
+      <th data-sort="major" title="Major / minor errors">Errors</th><th data-sort="output_label">Output</th></tr></thead><tbody></tbody></table></div>
     <p id="failed" class="muted"></p>
   </section>
   <section id="detail" aria-live="polite"><p class="muted">Select a student.</p></section>
@@ -277,7 +306,26 @@ _PAGE = """<!doctype html>
 """
 
 _ASSETS = Path(__file__).parent / "report_assets"
-_STYLE = (_ASSETS / "results_report.css").read_text(encoding="utf-8")
+_FONTS = Path(__file__).parent / "static" / "fonts"
+
+
+def _font_face(family: str, file: str, weight: str) -> str:
+    """The app's own font (SIL Open Font License, see static/fonts/OFL-*.txt) inlined as ``data:``,
+    so the report looks like the app with no network request. A missing font file falls back to
+    the system fonts with a warning; it must never stop this module (and the page) from loading."""
+    try:
+        data = base64.b64encode((_FONTS / file).read_bytes()).decode("ascii")
+    except OSError:
+        logger.warning(f"Results report: font {file} not found; using system fonts")
+        return ""
+    return (f"@font-face{{font-family:{family};font-weight:{weight};font-display:swap;"
+            f"src:url(data:font/woff2;base64,{data}) format('woff2')}}\n")
+
+
+_STYLE = (_font_face("libre-franklin", "LibreFranklin-Variable.woff2", "100 900")
+          + _font_face("libre-baskerville", "LibreBaskerville-Regular.woff2", "400")
+          + _font_face("libre-baskerville", "LibreBaskerville-Bold.woff2", "700")
+          + (_ASSETS / "results_report.css").read_text(encoding="utf-8"))
 # Draws every value with textContent. The one innerHTML is the feedback HTML that
 # _markdown_to_html escaped line by line before adding its own tags.
 _SCRIPT = (_ASSETS / "results_report.js").read_text(encoding="utf-8")
