@@ -534,12 +534,12 @@ The Hand back tab adds `Results_Report.html` to the root of the feedback ZIP and
 as its own download. It is one static page (`src/cqc_streamlit_app/results_report.py`,
 script and styles in `report_assets/`) that the instructor opens from disk later, with the
 app closed: the student table, then per student Feedback, Criteria, Errors (with scoring
-notes and compiler output), Requirements, Output (input, expected, student output and the
-diff) and Code, plus the solution and test cases when the output check was used. **Run in
+notes and compiler output), Requirements, Output (input, then the app's side-by-side view
+from `diff_view.align_rows` with synced panes, or the unified diff) and Code, plus the solution and test cases when the output check was used. **Run in
 OneCompiler** sends that student's code to onecompiler.com, only on that click. The page
 never regrades and never calls a model. Every value is JSON drawn with `textContent`; the
 page's Content-Security-Policy allows only its own script (by SHA-256) and OneCompiler
-frames. The report is rebuilt whenever the ZIP is (a regrade drops both).
+frames, and fonts only as `data:` (the app's own fonts are inlined). The report is rebuilt whenever the ZIP is (a regrade drops both).
 
 Code after a restart: `results_store.save_submissions` keeps each run's previewable source
 files as `<run_key>.submissions.zip` beside the saved results (decision 2B, 2026-11-11), and

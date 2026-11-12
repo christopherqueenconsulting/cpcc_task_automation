@@ -34,14 +34,97 @@
     }
     return node;
   }
+  // The app's side-by-side view (diff_view.py): one row per aligned line on each side, blank hatched
+  // filler rows keep the panes level, and the two panes scroll together, vertically and sideways.
+  function sideBySide(side) {
+    const wrap = el("div");
+    wrap.append(el("p", { cls: "sbs-sum", role: "status", text: side.summary }));
+    const key = el("details", { cls: "sbs-key" }, el("summary", { text: "How to read this" }));
+    const ul = el("ul");
+    for (const t of [
+      "- is in the expected output, + is in the student output. A marker on both sides means the two lines " +
+        "were matched as the same line of output; the tag says how they differ.",
+      "Tags: spacing, case, punctuation, number format, decimal places, value, wording, moved line, blank " +
+        "line. Differing words inside a matched line are underlined; spacing-only rows are grey.",
+      "Hatched rows are blank here because the other side has an extra line. Both panes scroll together.",
+    ])
+      ul.append(el("li", { text: t }));
+    key.append(ul);
+    wrap.append(key);
+    const grid = el("div", { cls: "sbs" });
+    const panes = [];
+    for (const [title, idx, nIdx, cls, mark, spoken] of [
+      ["Expected output", 2, 1, "rm", "-", 6],
+      ["Student output", 4, 3, "add", "+", 7],
+    ]) {
+      const rows = el("div", { cls: "rows" });
+      const pane = el("div", { cls: "pane", role: "region", tabindex: "0", "aria-label": title }, rows);
+      const frag = document.createDocumentFragment();
+      for (const r of side.rows) {
+        const v = r[idx],
+          k = r[0],
+          q = r[5];
+        const row = el("div", { cls: "r" }),
+          g = el("span", { cls: "g" }),
+          n = el("span", { cls: "n" }),
+          m = el("span", { cls: "m", "aria-hidden": "true" }),
+          c = el("span", { cls: "c", "aria-hidden": "true" }),
+          t = el("span", { cls: "t" });
+        if (v === null) {
+          row.className += " fl";
+          row.setAttribute("aria-hidden", "true");
+        } else {
+          n.append(el("span", { cls: "sr", text: "Line " }), String(r[nIdx]));
+          if (k !== "eq") {
+            row.className += " " + (k === "chg" && q === "spacing" ? "mu" : cls);
+            m.textContent = mark;
+            t.append(el("span", { cls: "sr", text: r[spoken] }));
+            if (q) c.textContent = DATA.diff_tags[q] || q;
+          }
+          if (typeof v === "string") t.append(v);
+          else for (const [piece, hi] of v) t.append(el("span", { cls: hi ? "w" : "", text: piece }));
+        }
+        g.append(n, m, c);
+        row.append(g, t);
+        frag.append(row);
+      }
+      rows.append(frag);
+      panes.push(pane);
+      grid.append(el("div", {}, el("h4", { text: title }), pane));
+    }
+    // Only the pane the user is driving pushes its position, so the two never fight over a scroll.
+    let driver = null;
+    for (const ev of ["wheel", "pointerdown", "keydown", "focus", "touchstart"])
+      for (const p of panes) p.addEventListener(ev, () => (driver = p), { passive: true });
+    const link = (src, dst) =>
+      src.addEventListener(
+        "scroll",
+        () => {
+          if (driver && driver !== src) return;
+          if (dst.scrollTop !== src.scrollTop) dst.scrollTop = src.scrollTop;
+          if (dst.scrollLeft !== src.scrollLeft) dst.scrollLeft = src.scrollLeft;
+        },
+        { passive: true },
+      );
+    link(panes[0], panes[1]);
+    link(panes[1], panes[0]);
+    wrap.append(grid);
+    return wrap;
+  }
+  const LONG_COLUMNS = ["Details", "Detail", "Feedback", "Reason", "Evidence", "Requirement"];
+  function colClass(header) {
+    return header === "Code" ? "ident" : LONG_COLUMNS.includes(header) ? "long" : "";
+  }
   function table(headers, rows) {
     const t = el("table");
     t.append(el("thead", {}, el("tr", {}, ...headers.map((h) => el("th", { text: h })))));
     const body = el("tbody");
     for (const row of rows)
-      body.append(el("tr", {}, ...row.map((c) => el("td", { cls: "wrap", text: String(c) }))));
+      body.append(
+        el("tr", {}, ...row.map((c, i) => el("td", { cls: colClass(headers[i]), text: String(c) }))),
+      );
     t.append(body);
-    return t;
+    return el("div", { cls: "tablewrap" }, t);
   }
   function fmt(n) {
     return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
@@ -64,7 +147,10 @@
   ];
   for (const [label, value] of tiles)
     $("#tiles").append(el("div", { cls: "tile" }, el("b", { text: String(value) }), label));
-  if (DATA.failed.length) $("#failed").textContent = "Grading failed for: " + DATA.failed.join(", ");
+  if (DATA.failed.length) {
+    $("#failed").className = "alert";
+    $("#failed").textContent = "Grading failed for: " + DATA.failed.join(", ");
+  }
 
   // ---- student list ----
   let sortKey = "id",
@@ -82,12 +168,14 @@
       const tr = el(
         "tr",
         { tabindex: "0" },
-        el("td", { text: s.id }),
-        el("td", { cls: s.status === "Graded" ? "" : "flag", text: s.status }),
-        el("td", { text: fmt(s.earned) + "/" + s.possible + " (" + s.pct + "%)" }),
-        el("td", { text: s.level }),
-        el("td", { text: String(s.major) }),
-        el("td", { text: String(s.minor) }),
+        el("td", {}, s.id, s.status === "Graded" ? null : el("span", { cls: "badge", text: s.status })),
+        el(
+          "td",
+          { cls: "num" },
+          fmt(s.earned) + "/" + s.possible,
+          el("div", { cls: "muted", text: s.pct + "%" }),
+        ),
+        el("td", { cls: "num", text: s.major + " / " + s.minor }),
         el("td", { text: s.output_label }),
       );
       if (selected === s) tr.className = "sel";
@@ -211,8 +299,58 @@
     if (buttons.length) buttons[0].click();
     drawRunner(container, code, DATA.runner_notice);
   }
+  // The diff view choice is shared by every case, like the app's Side by side | Unified radio.
+  let diffMode = "side";
+  let diffViews = [];
+  function drawDiff(c) {
+    const box = el("div");
+    const draw = () => {
+      box.replaceChildren();
+      if (c.side && diffMode === "side") {
+        box.append(sideBySide(c.side));
+      } else if (c.diff.kind === "full") {
+        box.append(
+          el("div", { cls: "label", text: "Differences (- expected, + student)" }),
+          diffBlock(c.diff.text),
+        );
+      } else if (c.diff.kind === "excerpt") {
+        box.append(
+          el("div", { cls: "label", text: "Differences, short excerpt (the full outputs were not kept)" }),
+          diffBlock(c.diff.text),
+        );
+      }
+    };
+    const wrap = el("div");
+    if (c.side) {
+      const seg = el("div", { cls: "seg", role: "radiogroup", "aria-label": "Diff view for case " + c.id });
+      const name = "dv-" + c.id + "-" + Math.random().toString(36).slice(2);
+      const inputs = [];
+      for (const [value, label] of [
+        ["side", "Side by side"],
+        ["unified", "Unified"],
+      ]) {
+        const input = el("input", { type: "radio", name: name, value: value });
+        input.checked = diffMode === value;
+        input.addEventListener("change", () => {
+          diffMode = value;
+          for (const v of diffViews) v();
+        });
+        inputs.push(input);
+        seg.append(el("label", {}, input, label));
+      }
+      diffViews.push(() => {
+        for (const i of inputs) i.checked = i.value === diffMode;
+        draw();
+      });
+      wrap.append(seg);
+    }
+    draw();
+    wrap.append(box);
+    return wrap;
+  }
   function drawOutput(container, out) {
-    container.append(el("p", { text: out.status }));
+    diffViews = [];
+    container.append(el("p", { cls: "muted", text: out.status }));
     container.append(el("p", {}, el("b", { text: "Result: " }), out.label));
     if (out.cannot_verify)
       container.append(
@@ -225,40 +363,35 @@
         out.cases.map((c) => [c.id, c.label, c.verdict, c.detail]),
       ),
     );
+    let first = true;
     for (const c of out.cases) {
       if (c.match) continue;
+      const body = el("div", { cls: "body" });
       const card = el(
-        "div",
-        { cls: "card" },
-        el("h3", { text: "Case " + c.id + (c.label ? ": " + c.label : "") + " - " + c.verdict }),
+        "details",
+        { cls: "case" },
+        el("summary", { text: "Case " + c.id + (c.label ? ": " + c.label : "") + " - " + c.verdict }),
+        body,
       );
+      if (first) card.open = true;
+      first = false;
       if (c.cut)
-        card.append(
+        body.append(
           el("p", {
-            cls: "flag",
+            cls: "alert",
             text: "This program printed more than 64 KB; only the first 64 KB was kept.",
           }),
         );
-      if (c.has_input) {
-        card.append(el("div", { cls: "muted", text: "Input" }), pre(c.input));
+      if (c.has_input) body.append(el("div", { cls: "label", text: "Input" }), pre(c.input));
+      if (!c.side) {
+        body.append(el("div", { cls: "label", text: "Expected output (your solution)" }), pre(c.expected));
+        body.append(el("div", { cls: "label", text: "Student output" }), pre(c.actual));
       }
-      card.append(el("div", { cls: "muted", text: "Expected output (your solution)" }), pre(c.expected));
-      card.append(el("div", { cls: "muted", text: "Student output" }), pre(c.actual));
-      if (c.diff.kind === "full") {
-        card.append(
-          el("div", { cls: "muted", text: "Differences (- expected, + student)" }),
-          diffBlock(c.diff.text),
-        );
-      } else if (c.diff.kind === "excerpt") {
-        card.append(
-          el("div", { cls: "muted", text: "Differences, short excerpt (the full outputs were not kept)" }),
-          diffBlock(c.diff.text),
-        );
-      } else if (c.diff.kind === "same") {
-        card.append(
+      if (c.diff.kind === "same")
+        body.append(
           el("p", { cls: "muted", text: "No differences in the stored text after normalization." }),
         );
-      }
+      else body.append(drawDiff(c));
       container.append(card);
     }
   }
@@ -271,12 +404,12 @@
         { cls: "tiles" },
         el("div", { cls: "tile" }, el("b", { text: fmt(s.earned) + "/" + s.possible }), "Score"),
         el("div", { cls: "tile" }, el("b", { text: s.pct + "%" }), "Percent"),
-        el("div", { cls: "tile" }, el("b", { text: s.level || "—" }), "Level"),
+        el("div", { cls: "tile" }, el("b", { cls: "txt", text: s.level || "—" }), "Level"),
         el("div", { cls: "tile" }, el("b", { text: s.major + " / " + s.minor }), "Errors (major / minor)"),
       ),
     );
     if (s.status !== "Graded")
-      d.append(el("p", { cls: "flag", text: s.status + (s.review_reason ? ": " + s.review_reason : "") }));
+      d.append(el("p", { cls: "alert", text: s.status + (s.review_reason ? ": " + s.review_reason : "") }));
     if (s.model) d.append(el("p", { cls: "muted small", text: "Graded with " + s.model }));
     const panels = [
       [
@@ -349,7 +482,7 @@
 
   // ---- solution ----
   if (DATA.solution) {
-    const sec = el("section", { cls: "card" }, el("h2", { text: "Solution and test cases" }));
+    const sec = el("section", { cls: "card", id: "solution" }, el("h2", { text: "Solution and test cases" }));
     const body = el("div");
     const toggle = el("button", { cls: "btn secondary", type: "button", text: "Show solution" });
     toggle.addEventListener("click", () => {
@@ -368,9 +501,9 @@
               "div",
               { cls: "card" },
               el("b", { text: c.id + (c.label ? ": " + c.label : "") }),
-              el("div", { cls: "muted", text: "Input" }),
+              el("div", { cls: "label", text: "Input" }),
               pre(c.input),
-              el("div", { cls: "muted", text: "Expected output" }),
+              el("div", { cls: "label", text: "Expected output" }),
               pre(c.expected),
             ),
           );

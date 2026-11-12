@@ -44,7 +44,7 @@ from cqc_cpcc.utilities.code_preview import (
     runner_language,
 )
 from cqc_cpcc.utilities.output_compare import full_unified_diff
-from cqc_streamlit_app import execution_view
+from cqc_streamlit_app import diff_view, execution_view
 
 REPORT_FILENAME = "Results_Report.html"
 #: The diff of one case is computed only below these sizes (the app asks first above them).
@@ -81,6 +81,20 @@ def _case_diff(expected: str, actual: str, excerpt: Optional[str]) -> dict:
     return {"kind": "none", "text": ""}
 
 
+def _case_side(expected: str, actual: str) -> Optional[dict]:
+    """The app's side-by-side rows for one case, inside the same size guard as the full diff;
+    ``None`` when the outputs are equal, missing or too large (the page then shows the unified diff)."""
+    if not (expected or actual) or expected == actual:
+        return None
+    n, m = expected.count("\n") + 1, actual.count("\n") + 1
+    if n > MAX_DIFF_LINES or m > MAX_DIFF_LINES or n * m > MAX_DIFF_CELLS:
+        return None
+    rows = diff_view.align_rows(expected, actual)
+    if len(rows) > diff_view.MAX_SIDE_ROWS:
+        return None
+    return {"rows": [diff_view._row_json(r) for r in rows], "summary": diff_view.summary_text(rows)}
+
+
 def _output(report: Optional[dict], cases: dict) -> Optional[dict]:
     if not isinstance(report, dict):
         return None
@@ -106,6 +120,7 @@ def _output(report: Optional[dict], cases: dict) -> Optional[dict]:
             "actual": clean_block(actual),
             "cut": bool(r.get("output_cut_by_runner")),
             "diff": _case_diff(expected, actual, r.get("diff_excerpt")),
+            "side": _case_side(expected, actual),
         })
     return {
         "status": execution_view._STATUS_TEXT.get(report.get("status"), "Output check status unknown."),
@@ -219,6 +234,7 @@ def build_report_data(results: list, *, title: str, meta: Optional[dict] = None,
         "runner_origin": ONECOMPILER_ORIGIN,
         "runner_notice": RUNNER_NOTICE,
         "no_code_text": NO_CODE_TEXT,
+        "diff_tags": diff_view.CLASS_TAG,
     }
 
 
@@ -228,7 +244,7 @@ def build_results_report_html(results: list, **kwargs) -> str:
     # Each "<" becomes the JSON escape \u003c, so nothing in a value can end the JSON's script element.
     data_json = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")
     script_hash = base64.b64encode(hashlib.sha256(_SCRIPT.encode("utf-8")).digest()).decode("ascii")
-    csp = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+    csp = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:; "
            f"script-src 'sha256-{script_hash}'; frame-src {ONECOMPILER_ORIGIN}; base-uri 'none'; "
            "form-action 'none'")
     values = {"CSP": html.escape(csp, quote=True), "TITLE": html.escape(data["title"]),
@@ -262,10 +278,9 @@ _PAGE = """<!doctype html>
 <main>
   <section id="list">
     <input id="filter" type="search" placeholder="Filter students" aria-label="Filter students">
-    <table id="students"><thead><tr>
-      <th data-sort="id">Student</th><th data-sort="status">Status</th><th data-sort="pct">Score</th>
-      <th data-sort="level">Level</th><th data-sort="major">Major</th><th data-sort="minor">Minor</th>
-      <th data-sort="output_label">Output</th></tr></thead><tbody></tbody></table>
+    <div class="tablewrap"><table id="students"><thead><tr>
+      <th data-sort="id">Student</th><th data-sort="pct">Score</th>
+      <th data-sort="major" title="Major / minor errors">Errors</th><th data-sort="output_label">Output</th></tr></thead><tbody></tbody></table></div>
     <p id="failed" class="muted"></p>
   </section>
   <section id="detail" aria-live="polite"><p class="muted">Select a student.</p></section>
@@ -277,7 +292,21 @@ _PAGE = """<!doctype html>
 """
 
 _ASSETS = Path(__file__).parent / "report_assets"
-_STYLE = (_ASSETS / "results_report.css").read_text(encoding="utf-8")
+_FONTS = Path(__file__).parent / "static" / "fonts"
+
+
+def _font_face(family: str, file: str, weight: str) -> str:
+    """The app's own font (SIL Open Font License, see static/fonts/OFL-*.txt) inlined as ``data:``,
+    so the report looks like the app with no network request."""
+    data = base64.b64encode((_FONTS / file).read_bytes()).decode("ascii")
+    return (f"@font-face{{font-family:{family};font-weight:{weight};font-display:swap;"
+            f"src:url(data:font/woff2;base64,{data}) format('woff2')}}\n")
+
+
+_STYLE = (_font_face("libre-franklin", "LibreFranklin-Variable.woff2", "100 900")
+          + _font_face("libre-baskerville", "LibreBaskerville-Regular.woff2", "400")
+          + _font_face("libre-baskerville", "LibreBaskerville-Bold.woff2", "700")
+          + (_ASSETS / "results_report.css").read_text(encoding="utf-8"))
 # Draws every value with textContent. The one innerHTML is the feedback HTML that
 # _markdown_to_html escaped line by line before adding its own tags.
 _SCRIPT = (_ASSETS / "results_report.js").read_text(encoding="utf-8")

@@ -10,7 +10,7 @@ import re
 import pytest
 
 from cqc_cpcc.rubric_models import DetectedError, ReconciliationNote, RequirementResult, RubricAssessmentResult
-from cqc_streamlit_app import results_report
+from cqc_streamlit_app import diff_view, results_report
 
 HOSTILE_CODE = ('public class Main { // </script><script>alert(1)</script>\n'
                 '  public static void main(String[] a) {}\n}\n')
@@ -129,6 +129,38 @@ def test_old_runs_fall_back_to_the_stored_excerpt():
         [("Ada Example", _result(execution_report=report))], title="T"))
     assert data["students"][0]["output"]["cases"][0]["diff"] == {"kind": "excerpt", "text": "-a\n+b"}
     assert data["students"][0]["output"]["cases"][0]["has_input"] is False
+    assert data["students"][0]["output"]["cases"][0]["side"] is None
+
+
+@pytest.mark.unit
+def test_differing_cases_carry_the_apps_side_by_side_rows():
+    report = {"status": "ok", "gate": {"mode": "differs"},
+              "cases": [{"case_id": "c1", "verdict": "values_differ", "expected_output": "Hi\nTotal: 5\n",
+                         "actual_output": "Hi\nTotal: 4\nBye\n"},
+                        {"case_id": "c2", "verdict": "match", "expected_output": "x\n", "actual_output": "x\n"}]}
+    data = _data_of(results_report.build_results_report_html(
+        [("Ada Example", _result(execution_report=report))], title="T"))
+    c1, c2 = data["students"][0]["output"]["cases"]
+    rows = diff_view.align_rows("Hi\nTotal: 5\n", "Hi\nTotal: 4\nBye\n")
+    assert c1["side"]["rows"] == [diff_view._row_json(r) for r in rows]
+    assert c1["side"]["summary"] == diff_view.summary_text(rows)
+    assert c2["side"] is None
+    assert data["diff_tags"] == diff_view.CLASS_TAG
+
+
+@pytest.mark.unit
+def test_side_by_side_is_left_out_over_the_size_guard(monkeypatch):
+    monkeypatch.setattr(results_report, "MAX_DIFF_LINES", 2)
+    assert results_report._case_side("a\nb\nc\n", "a\n") is None
+    assert results_report._case_side("a\n", "b\n") is not None
+
+
+@pytest.mark.unit
+def test_the_apps_fonts_are_inlined_and_allowed_only_as_data():
+    page = results_report.build_results_report_html([("Ada Example", _result())], title="T")
+    csp = html.unescape(re.search(r'http-equiv="Content-Security-Policy" content="([^"]+)"', page).group(1))
+    assert "font-src data:;" in csp
+    assert page.count("@font-face") == 3 and "url(data:font/woff2;base64," in page
 
 
 @pytest.mark.unit
