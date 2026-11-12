@@ -528,6 +528,26 @@ row someone entered by hand online is never re-added.
 - **Rate Limits**: Respect OpenAI rate limits
 - **Error Handling**: Don't expose API keys in error messages
 
+### Results report (hand-back ZIP)
+
+The Hand back tab adds `Results_Report.html` to the root of the feedback ZIP and offers it
+as its own download. It is one static page (`src/cqc_streamlit_app/results_report.py`,
+script and styles in `report_assets/`) that the instructor opens from disk later, with the
+app closed: the student table, then per student Feedback, Criteria, Errors (with scoring
+notes and compiler output), Requirements, Output (input, expected, student output and the
+diff) and Code, plus the solution and test cases when the output check was used. **Run in
+OneCompiler** sends that student's code to onecompiler.com, only on that click. The page
+never regrades and never calls a model. Every value is JSON drawn with `textContent`; the
+page's Content-Security-Policy allows only its own script (by SHA-256) and OneCompiler
+frames. The report is rebuilt whenever the ZIP is (a regrade drops both).
+
+Code after a restart: `results_store.save_submissions` keeps each run's previewable source
+files as `<run_key>.submissions.zip` beside the saved results (decision 2B, 2026-11-11), and
+`_source_files_for` falls back to it when the session's inputs are gone, so the Code tab,
+the runner and the report keep working. Plan and decisions:
+`docs/plans/static-results-report.md`; data handling: `docs/PRIVACY_AND_TELEMETRY.md`;
+purge and rollback: its section "Kept code and the results report: purge and rollback".
+
 ### Writing Grades Back to BrightSpace
 
 Two routes with **different reversibility**, which is the single most important

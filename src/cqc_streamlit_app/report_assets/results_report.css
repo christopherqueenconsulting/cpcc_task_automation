@@ -1,0 +1,248 @@
+:root {
+  --fg: #1f2a30;
+  --muted: #5b6b73;
+  --line: #d5dde1;
+  --bg: #ffffff;
+  --panel: #f5f8f9;
+  --accent: #0b4f6c;
+  --bad: #a12a2a;
+  --warn: #8a5a00;
+  --ok: #1d6b3a;
+  --add: #e6f4ea;
+  --del: #fbe9e9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fg: #e3e9ec;
+    --muted: #9fb0b8;
+    --line: #34434a;
+    --bg: #121a1e;
+    --panel: #1a252a;
+    --accent: #7cc4e4;
+    --bad: #f08a8a;
+    --warn: #e6b85c;
+    --ok: #7fd29a;
+    --add: #1d3a27;
+    --del: #3d1f1f;
+  }
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  font:
+    14px/1.45 system-ui,
+    -apple-system,
+    "Segoe UI",
+    sans-serif;
+  color: var(--fg);
+  background: var(--bg);
+}
+header {
+  padding: 16px 20px 8px;
+  border-bottom: 1px solid var(--line);
+}
+h1 {
+  font-size: 20px;
+  margin: 0 0 4px;
+  color: var(--accent);
+}
+h2 {
+  font-size: 17px;
+  margin: 0 0 8px;
+}
+h3 {
+  font-size: 15px;
+  margin: 14px 0 6px;
+}
+.muted {
+  color: var(--muted);
+}
+.small {
+  font-size: 12px;
+}
+.tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+.tile {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 12px;
+  background: var(--panel);
+}
+.tile b {
+  display: block;
+  font-size: 18px;
+}
+main {
+  display: grid;
+  grid-template-columns: minmax(320px, 38%) 1fr;
+  gap: 16px;
+  padding: 16px 20px;
+}
+@media (max-width: 900px) {
+  main {
+    grid-template-columns: 1fr;
+  }
+}
+#filter {
+  width: 100%;
+  padding: 6px 8px;
+  margin-bottom: 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--fg);
+}
+table {
+  border-collapse: collapse;
+  width: 100%;
+}
+th,
+td {
+  border-bottom: 1px solid var(--line);
+  padding: 5px 6px;
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  background: var(--panel);
+  position: sticky;
+  top: 0;
+}
+th[data-sort] {
+  cursor: pointer;
+}
+#students tbody tr {
+  cursor: pointer;
+}
+#students tbody tr:hover,
+#students tbody tr.sel {
+  background: var(--panel);
+}
+.flag {
+  color: var(--warn);
+  font-weight: 600;
+}
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+  margin: 10px 0;
+}
+.tabs button {
+  border: 1px solid var(--line);
+  border-bottom: none;
+  background: var(--panel);
+  color: var(--fg);
+  padding: 5px 10px;
+  border-radius: 4px 4px 0 0;
+  cursor: pointer;
+  font: inherit;
+}
+.tabs button[aria-selected="true"] {
+  background: var(--bg);
+  font-weight: 600;
+}
+pre {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px;
+  overflow: auto;
+  max-height: 480px;
+  margin: 4px 0 10px;
+  font:
+    12.5px/1.4 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+}
+pre.code {
+  counter-reset: ln;
+  white-space: pre;
+}
+pre.code span.l {
+  display: block;
+}
+pre.code span.l::before {
+  counter-increment: ln;
+  content: counter(ln);
+  display: inline-block;
+  width: 3.2em;
+  margin-right: 10px;
+  text-align: right;
+  color: var(--muted);
+  user-select: none;
+}
+pre.diff span.a {
+  background: var(--add);
+  display: block;
+}
+pre.diff span.d {
+  background: var(--del);
+  display: block;
+}
+pre.wrap {
+  white-space: pre-wrap;
+}
+.card {
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin: 8px 0;
+  background: var(--bg);
+}
+.btn {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: var(--bg);
+  padding: 5px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  font: inherit;
+}
+.btn.secondary {
+  background: var(--bg);
+  color: var(--accent);
+}
+a {
+  color: var(--accent);
+}
+iframe.runner {
+  width: 100%;
+  height: 540px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+}
+.files {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 6px 0;
+}
+.files button {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--fg);
+  border-radius: 12px;
+  padding: 2px 10px;
+  cursor: pointer;
+  font: inherit;
+}
+.files button[aria-pressed="true"] {
+  border-color: var(--accent);
+  font-weight: 600;
+}
+.feedback h1 {
+  font-size: 16px;
+}
+.feedback h2 {
+  font-size: 14px;
+}
