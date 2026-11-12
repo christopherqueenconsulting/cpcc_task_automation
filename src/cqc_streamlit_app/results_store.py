@@ -192,6 +192,7 @@ MAX_SUBMISSION_FILE_BYTES = 1024 * 1024
 MAX_SUBMISSION_ENTRIES = 5000
 STALE_TMP_SECONDS = 3600
 _SAFE_FILE_NAME = re.compile(r"[^\\/\x00-\x1f]{1,200}")
+_FOLDER = re.compile(r"\d{4}")
 
 
 def _submissions_path(run_key: str) -> Path:
@@ -290,7 +291,10 @@ def load_submissions(run_key: str) -> Optional[dict]:
             os.chmod(target, 0o700)
             for info in infos:
                 parts = info.filename.split("/")
-                if len(parts) != 2 or parts[0] not in manifest or info.is_dir():
+                # Only the four-digit folders save_submissions writes: the manifest comes from
+                # the same untrusted ZIP, so a listed ".." must not count.
+                if len(parts) != 2 or not _FOLDER.fullmatch(parts[0]) or parts[0] not in manifest \
+                        or info.is_dir():
                     continue
                 folder, name = parts
                 if not _SAFE_FILE_NAME.fullmatch(name) or name in (".", "..") \
@@ -299,6 +303,8 @@ def load_submissions(run_key: str) -> Optional[dict]:
                 student_dir = target / folder
                 student_dir.mkdir(exist_ok=True)
                 dest = student_dir / name
+                if dest.resolve().parent.parent != target.resolve():
+                    continue
                 dest.write_bytes(archive.read(info))
                 os.chmod(dest, 0o600)
                 out.setdefault(str(manifest[folder]), {})[name] = str(dest)

@@ -23,7 +23,7 @@ analytics.
 | **Exec-runner sandbox** (local Docker container, output check and the Solution tab's **Run locally**) | A student's program (or the instructor's solution) and its test inputs, for the length of one run | Runs with no network, a read-only root, and a tmpfs for scratch files; the container is removed when it exits (`--rm`) and nothing is written to the host. Nothing is sent to any outside service. Not available on Streamlit Community Cloud or with `CQC_EXECUTION=off`: the app shows a notice and runs nothing. |
 | **Saved grading results**: Solution workspace (PR 16) | The instructor's solution source and, per test case, its label, input and the solution's expected output. No student name, score or student output: a student's program output is stored once, in that student's `execution_report` (row above), and the workspace only names the plan it belongs to | In the same local results file (`0600`, newest 20 runs). Written only while the sandbox is ready; session-only on Streamlit Community Cloud. Rebuilt field by field on load, so an edited file cannot add anything. A re-grade with the runner off keeps the previously saved workspace (`save_run` keeps it when `execution_workspace` is omitted); `delete_run` removes it with the run. The hidden `code_runner` page reads it by run key (64 hex characters, the only thing in its URL) and only when the sandbox is ready; on Cloud, with `CQC_EXECUTION=off` or without Docker it shows a notice and reads no results. The key is a bearer secret: anyone who has the link (browser history, Referer, a shared screen) and can reach the app can open the page, which has no sign-in, so bind Streamlit to `127.0.0.1` for local use (`--server.address 127.0.0.1`) and do not share the link. |
 | **OneCompiler** and **OnlineGDB**: the instructor's solution (Solution tab, PR 16) | The solution source, no student work | Sent only when the instructor clicks **Run in OneCompiler** on the Solution tab; **Open in OnlineGDB** opens a blank editor and the solution reaches it only if pasted. The notice is shown directly under the buttons, visible at all times before any click, and says not to use a student's work as the solution (the solution is saved to disk and sent to OneCompiler on click). Same standing as the row below: no data-processing agreement, FERPA status not verified. |
-| **Saved grading results**: submitted code (`<run_key>.submissions.zip`, decision 2B, 2026-11-11) | Each student's previewable source and text files (no documents or binaries), at most 1 MB per file and 20 MB per run, in numbered folders with a `manifest.json` of student ids | Kept so the Code tab, **Run in OneCompiler** and the results report still work after a restart. Same folder and rules as the results file: `0600` in the `0700` results folder, written only when results are saved (`persistence_enabled()`, so never on Streamlit Community Cloud), deleted with its run and pruned with the newest 20 runs. On read it is extracted into a new `0700` temp folder (the temp-file row above applies) and is treated as untrusted: only manifest folders one level deep are read. Purge one run, only the kept code, or roll the feature back: [Kept code and the results report: purge and rollback](#kept-code-and-the-results-report-purge-and-rollback). |
+| **Saved grading results**: submitted code (`<run_key>.submissions.zip`, decision 2B, 2026-11-11) | Each student's previewable source and text files (no documents or binaries), at most 1 MB per file and 20 MB per run, in numbered folders with a `manifest.json` of student ids | Kept so the Code tab, **Run in OneCompiler** and the results report still work after a restart. Same folder and rules as the results file: `0600` in the `0700` results folder, written only when results are saved (`persistence_enabled()`, so never on Streamlit Community Cloud), deleted with its run and pruned with the newest 20 runs. On read it is extracted into a new `0700` temp folder (the temp-file row above applies) and is treated as untrusted: only the four-digit manifest folders the app writes, one level deep, are read. Purge one run, only the kept code, or roll the feature back: [Kept code and the results report: purge and rollback](#kept-code-and-the-results-report-purge-and-rollback). |
 | **Hand-back ZIP and its `Results_Report.html`** (also offered as its own download) | Student names, scores, levels, feedback, detected errors with raw compiler diagnostics, scoring notes, requirement verdicts, each case's input, expected and actual output and their diff, and each student's submitted code; the instructor's solution and test cases when the output check was used. Never the grading prompt | One static page, opened from disk with no server. Nothing loads from the web when it opens; its Content-Security-Policy allows only its own script (by hash) and frames from onecompiler.com. A student's code goes to OneCompiler only when the instructor clicks **Run in OneCompiler** for that student (the page says so). Once downloaded it is an education record in the instructor's keeping: store it with the feedback ZIP, never upload or share it. |
 | **OpenAI** (direct) | Audio/video submissions only | Whisper transcription. `OPENAI_API_KEY` is optional and needed only for this. |
 | **OneCompiler** (onecompiler.com) and **OnlineGDB** (onlinegdb.com) | One student's code | Sent only when the instructor acts on that student's Code tab. OneCompiler: the editor loads and the code is posted to it only after **Run in OneCompiler** is clicked. OnlineGDB: **Open in OnlineGDB** opens a blank editor, and the code reaches it only if the instructor pastes it in. No data-processing agreement is in place with either site, and their FERPA status has not been verified. |
@@ -32,16 +32,30 @@ analytics.
 
 ## Kept code and the results report: purge and rollback
 
-The saved-results folder is `${CQC_GRADING_RESULTS_DIR:-$HOME/.cqc_cpcc/grading_results}`
-(below, `D`). The commands work in zsh and bash on macOS and Linux.
+The saved-results folder is `${CQC_GRADING_RESULTS_DIR:-$HOME/.cqc_cpcc/grading_results}`.
+Each command below spells that out in full, so it works pasted on its own into a new
+terminal (zsh or bash, macOS or Linux), and none uses a glob that could match outside the
+folder. If the folder does not exist, `cp` and `find` stop with an error and change nothing.
 
-1. **Back up first** if you may want the runs back:
-   `mkdir -m 700 ~/grading_results_backup && cp -p "$D"/* ~/grading_results_backup/`.
-   The backup holds student data: keep it `0700` and delete it when done.
+1. **Back up first** if you may want the runs back. This copies the whole folder to a new,
+   dated folder in your home directory (outside the results folder) and makes it private:
+
+   ```bash
+   B="$HOME/grading_results_backup_$(date +%Y%m%d_%H%M%S)"
+   cp -Rp "${CQC_GRADING_RESULTS_DIR:-$HOME/.cqc_cpcc/grading_results}" "$B" && chmod 700 "$B" && echo "$B"
+   ```
+
+   The backup holds student data: delete it when you no longer need it.
 2. **One run:** the **Clear results** button on the Grade Assignment page removes that run's
    `<run_key>.json` and its `<run_key>.submissions.zip` (`results_store.delete_run`).
-3. **Kept code only, every run, results kept:**
-   `rm -f -- "$D"/*.submissions.zip "$D"/.subs.*.tmp`. Results, scores and feedback stay.
+3. **Kept code only, every run, results kept.** Lists each file as it deletes it; results,
+   scores and feedback stay:
+
+   ```bash
+   find "${CQC_GRADING_RESULTS_DIR:-$HOME/.cqc_cpcc/grading_results}" -maxdepth 1 -type f \
+     \( -name '*.submissions.zip' -o -name '.subs.*.tmp' \) -print -delete
+   ```
+
    Copies extracted for a session sit in `<system tmp>/cqc_cpcc/cqc_saved_subs_*`; the temp
    sweep deletes them at the next app start after 24 hours, or delete them by hand.
 4. **Rollback of this feature:** revert the pull request, then run step 3. The code before
@@ -49,7 +63,8 @@ The saved-results folder is `${CQC_GRADING_RESULTS_DIR:-$HOME/.cqc_cpcc/grading_
    stay on disk.
 5. **Copies outside the app:** a downloaded hand-back ZIP or `Results_Report.html` is not
    touched by any step above. Delete it where it was saved.
-6. **When code was not kept:** the app log (`logs/cpcc_*.log`) has a line
+6. **When code was not kept:** the app log, `logs/cpcc_<date>.log` in the folder the app was
+   started from (the repository folder with `./run.sh`), has a line
    `Kept submitted code for run <first 8 characters of the run key>: N file(s) kept, M not
    kept`, with no student name. A run with none kept shows "The submitted files were not
    available" in the report's Code tab after a restart.

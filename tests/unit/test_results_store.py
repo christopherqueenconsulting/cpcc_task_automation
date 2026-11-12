@@ -210,3 +210,25 @@ def test_code_not_kept_is_logged_without_names(tmp_path, monkeypatch):
     assert messages == ["Kept submitted code for run abc123de: 1 file(s) kept, 1 not kept "
                         "(not code, unreadable or over the size limits)"]
     assert "Ada" not in messages[0] and "Big" not in messages[0]
+
+
+@pytest.mark.unit
+def test_a_manifest_cannot_name_a_parent_folder(tmp_path, monkeypatch):
+    import json
+    import tempfile
+    import zipfile
+
+    extract_root = tmp_path / "tmp_root"
+    extract_root.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(extract_root))
+    results_store.results_dir().mkdir(parents=True, exist_ok=True)
+    path = results_store.results_dir() / "abc123.submissions.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps(
+            {"version": 1, "students": {"..": "Ada Example", ".": "Ben Sample", "0000": "Cal Fixture"}}))
+        archive.writestr("../evil.java", "x")
+        archive.writestr("./also.java", "x")
+        archive.writestr("0000/Main.java", "class Main {}")
+    loaded = results_store.load_submissions("abc123")
+    assert set(loaded) == {"Cal Fixture"}
+    assert not list(extract_root.rglob("evil.java")) and not list(extract_root.rglob("also.java"))
