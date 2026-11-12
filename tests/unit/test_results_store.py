@@ -105,3 +105,79 @@ def test_run_keys_are_ascii_alphanumeric_and_a_file_cannot_rename_itself(tmp_pat
     data["run_key"] = "../evil"
     path.write_text(json.dumps(data))
     assert [r["run_key"] for r in results_store.load_runs()] == ["goodkey"]
+
+
+# --------------------------------------------------------------------------- #
+# The run's submitted code, kept beside the run (decision 2B, 2026-11-11)
+# --------------------------------------------------------------------------- #
+def _files(tmp_path, folder, **contents):
+    out = {}
+    for name, text in contents.items():
+        path = tmp_path / folder / name.replace("_dot_", ".")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if isinstance(text, bytes):
+            path.write_bytes(text)
+        else:
+            path.write_text(text)
+        out[path.name] = str(path)
+    return out
+
+
+@pytest.mark.unit
+def test_submissions_round_trip_owner_only_and_code_only(tmp_path):
+    subs = {"101 - Ada Example / A:1": _files(tmp_path, "a", Main_dot_java="class Main {}", Notes_dot_docx=b"PK"),
+            "Ben Sample": _files(tmp_path, "b", app_dot_py="print(1)")}
+    assert results_store.save_submissions("abc123", subs)
+    path = results_store.results_dir() / "abc123.submissions.zip"
+    assert oct(path.stat().st_mode & 0o777) == "0o600"
+    assert results_store.has_saved_submissions("abc123")
+    loaded = results_store.load_submissions("abc123")
+    assert set(loaded) == {"101 - Ada Example / A:1", "Ben Sample"}
+    assert list(loaded["101 - Ada Example / A:1"]) == ["Main.java"]  # the .docx is not kept
+    with open(loaded["Ben Sample"]["app.py"]) as f:
+        assert f.read() == "print(1)"
+    assert oct(os.stat(loaded["Ben Sample"]["app.py"]).st_mode & 0o777) == "0o600"
+
+
+@pytest.mark.unit
+def test_submissions_go_with_their_run(tmp_path):
+    results_store.save_run("abc123", "rubric", [("Ada Example", _result())])
+    results_store.save_submissions("abc123", {"Ada Example": _files(tmp_path, "a", Main_dot_java="x")})
+    results_store.delete_run("abc123")
+    assert not (results_store.results_dir() / "abc123.submissions.zip").exists()
+    # An archive whose run was pruned is pruned too.
+    results_store.save_submissions("orphan", {"Ada Example": _files(tmp_path, "a", Main_dot_java="x")})
+    results_store._prune(results_store.results_dir())
+    assert not (results_store.results_dir() / "orphan.submissions.zip").exists()
+
+
+@pytest.mark.unit
+def test_submissions_not_kept_when_persistence_is_off(tmp_path, monkeypatch):
+    monkeypatch.setenv("CQC_RESULTS_PERSIST", "off")
+    assert not results_store.save_submissions("abc123", {"Ada Example": _files(tmp_path, "a", Main_dot_java="x")})
+    assert results_store.load_submissions("abc123") is None
+    assert not results_store.has_saved_submissions("abc123")
+
+
+@pytest.mark.unit
+def test_nothing_kept_without_code_files(tmp_path):
+    assert not results_store.save_submissions("abc123", {"Ada Example": _files(tmp_path, "a", r_dot_pdf=b"%PDF")})
+    assert not (results_store.results_dir() / "abc123.submissions.zip").exists()
+
+
+@pytest.mark.unit
+def test_a_tampered_archive_cannot_write_outside_its_folder(tmp_path):
+    import json
+    import zipfile
+
+    results_store.results_dir().mkdir(parents=True, exist_ok=True)
+    path = results_store.results_dir() / "abc123.submissions.zip"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("manifest.json", json.dumps({"version": 1, "students": {"0000": "Ada Example"}}))
+        archive.writestr("0000/../../evil.java", "x")
+        archive.writestr("../evil.java", "x")
+        archive.writestr("9999/Other.java", "x")
+        archive.writestr("0000/Main.java", "class Main {}")
+    loaded = results_store.load_submissions("abc123")
+    assert loaded == {"Ada Example": {"Main.java": loaded["Ada Example"]["Main.java"]}}
+    assert not list(tmp_path.rglob("evil.java"))

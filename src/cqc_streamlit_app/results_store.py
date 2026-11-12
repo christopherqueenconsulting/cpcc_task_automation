@@ -7,6 +7,8 @@ and the downloads are still there next session. They contain student names and s
 so they are stored only locally, owner-only, outside the repository:
 ``~/.cqc_cpcc/grading_results/<run_key>.json`` (``CQC_GRADING_RESULTS_DIR`` overrides).
 Only the most recent ``MAX_RUNS`` runs are kept.
+Each run's submitted code is kept beside it as ``<run_key>.submissions.zip`` (decision 2B,
+2026-11-11) so the Code tab and the results report still have it after a restart.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import os
 import re
 import tempfile
 import time
+import zipfile
 from pathlib import Path
 from typing import Optional
 
@@ -155,13 +158,135 @@ def _prune(directory: Path) -> None:
     runs = sorted(directory.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
     for old in runs[MAX_RUNS:]:
         old.unlink(missing_ok=True)
+    # A kept submissions ZIP goes with its run.
+    for archive in directory.glob(f"*{SUBMISSIONS_SUFFIX}"):
+        if not (directory / (archive.name[:-len(SUBMISSIONS_SUFFIX)] + ".json")).exists():
+            archive.unlink(missing_ok=True)
 
 
 def delete_run(run_key: str) -> None:
     try:
         _path(run_key).unlink(missing_ok=True)
+        _submissions_path(run_key).unlink(missing_ok=True)
     except ValueError:
         pass
+
+
+# --------------------------------------------------------------------------- #
+# The run's submitted code, kept so the Code tab and the results report work after a restart
+# (Christopher's decision 2B, 2026-11-11: keep the submissions as a ZIP beside the run).
+# --------------------------------------------------------------------------- #
+SUBMISSIONS_SUFFIX = ".submissions.zip"
+_MANIFEST = "manifest.json"
+MAX_SUBMISSIONS_BYTES = 20 * 1024 * 1024  # uncompressed, all students together
+MAX_SUBMISSION_FILE_BYTES = 1024 * 1024
+MAX_SUBMISSION_ENTRIES = 5000
+_SAFE_FILE_NAME = re.compile(r"[^\\/\x00-\x1f]{1,200}")
+
+
+def _submissions_path(run_key: str) -> Path:
+    return _path(run_key).with_name(f"{run_key}{SUBMISSIONS_SUFFIX}")
+
+
+def has_saved_submissions(run_key: str) -> bool:
+    try:
+        return persistence_enabled() and _submissions_path(run_key).is_file()
+    except ValueError:
+        return False
+
+
+def save_submissions(run_key: str, files_by_student: dict) -> bool:
+    """Keep the previewable source files of a run as ``<run_key>.submissions.zip``.
+
+    ``files_by_student`` maps a student id to ``StudentSubmission.files`` (``{name: path}``).
+    The ZIP has one numbered folder per student and a ``manifest.json`` mapping each folder
+    to its student id, so ids with any character survive. Only files the Code tab can show are
+    kept (no documents or binaries), each at most ``MAX_SUBMISSION_FILE_BYTES`` and all together
+    at most ``MAX_SUBMISSIONS_BYTES``. Written atomically, owner-only (0600), and only when
+    :func:`persistence_enabled`. Returns whether a ZIP was written."""
+    from cqc_cpcc.utilities.code_preview import _is_previewable
+
+    if not persistence_enabled() or not files_by_student:
+        return False
+    directory = results_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    os.chmod(directory, 0o700)
+    target = _submissions_path(run_key)
+    manifest, total, written = {}, 0, 0
+    fd, tmp = tempfile.mkstemp(dir=directory, prefix=".subs.", suffix=".tmp")
+    os.close(fd)
+    try:
+        with zipfile.ZipFile(tmp, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for index, (student_id, files) in enumerate(files_by_student.items()):
+                folder = f"{index:04d}"
+                manifest[folder] = str(student_id)
+                for name, ref in (files or {}).items():
+                    base = os.path.basename(str(name))
+                    if not _SAFE_FILE_NAME.fullmatch(base) or not _is_previewable(base):
+                        continue
+                    try:
+                        if not isinstance(ref, str) or not os.path.isfile(ref):
+                            continue
+                        size = os.path.getsize(ref)
+                        if size > MAX_SUBMISSION_FILE_BYTES or total + size > MAX_SUBMISSIONS_BYTES:
+                            continue
+                        archive.write(ref, arcname=f"{folder}/{base}")
+                    except OSError:
+                        continue
+                    total += size
+                    written += 1
+            archive.writestr(_MANIFEST, json.dumps({"version": 1, "students": manifest}))
+        if not written:
+            os.unlink(tmp)
+            return False
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, target)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+    return True
+
+
+def load_submissions(run_key: str) -> Optional[dict]:
+    """The kept files of a run as ``{student id: {file name: path}}``, or ``None``.
+
+    The files are extracted into a new owner-only temporary folder: paths, never inline text, so
+    a file's content is never mistaken for a path to read. The ZIP is not trusted: only names
+    listed in the manifest, one folder deep, within the size limits, are extracted."""
+    if not persistence_enabled():
+        return None
+    try:
+        path = _submissions_path(run_key)
+        if not path.is_file():
+            return None
+        out: dict = {}
+        with zipfile.ZipFile(path) as archive:
+            manifest = json.loads(archive.read(_MANIFEST)).get("students") or {}
+            if not isinstance(manifest, dict):
+                return None
+            infos = archive.infolist()[:MAX_SUBMISSION_ENTRIES]
+            if sum(i.file_size for i in infos) > MAX_SUBMISSIONS_BYTES + 1024 * 1024:
+                return None
+            target = Path(tempfile.mkdtemp(prefix="cqc_saved_subs_"))
+            os.chmod(target, 0o700)
+            for info in infos:
+                parts = info.filename.split("/")
+                if len(parts) != 2 or parts[0] not in manifest or info.is_dir():
+                    continue
+                folder, name = parts
+                if not _SAFE_FILE_NAME.fullmatch(name) or name in (".", "..") \
+                        or info.file_size > MAX_SUBMISSION_FILE_BYTES:
+                    continue
+                student_dir = target / folder
+                student_dir.mkdir(exist_ok=True)
+                dest = student_dir / name
+                dest.write_bytes(archive.read(info))
+                os.chmod(dest, 0o600)
+                out.setdefault(str(manifest[folder]), {})[name] = str(dest)
+        return out
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, AttributeError):
+        return None
 
 
 def load_run(run_key: str) -> Optional[tuple]:

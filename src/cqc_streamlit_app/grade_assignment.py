@@ -47,7 +47,7 @@ from cqc_cpcc.rubric_grading import (
     rubric_scores_errors,
 )
 from cqc_cpcc.utilities.AI import llm_limits, llm_progress
-from cqc_streamlit_app import execution_view, requirement_editor, results_store, solution_view
+from cqc_streamlit_app import execution_view, requirement_editor, results_report, results_store, solution_view
 from cqc_streamlit_app.effort_recommendation_ui import preapply_for, render_effort_recommendation
 from cqc_streamlit_app.app_settings import load_settings, remember
 from cqc_cpcc.utilities.submission_validity import (
@@ -2899,6 +2899,10 @@ def remember_results(run_key: str, grading_mode: str) -> None:
                                # None unless the output check was used and the sandbox is ready.
                                execution_workspace=(None if grading_mode == "errors_only"
                                                     else solution_view.workspace_to_save(run_key)))
+        # Keep the submitted code once per run, so the Code tab and the results report still
+        # have it after a restart (decision 2B, 2026-11-11).
+        if grading_mode != "errors_only" and submissions and not results_store.has_saved_submissions(run_key):
+            results_store.save_submissions(run_key, {sid: sub.files for sid, sub in submissions.items()})
     except Exception as e:  # noqa: BLE001 - saving is a convenience; never lose the run over it
         logger.warning(f"Could not save grading results to disk: {type(e).__name__}")
 
@@ -3863,6 +3867,23 @@ def _submission_for(run_key: str, student_id: str):
             .get("submissions", {}).get(student_id))
 
 
+def _saved_source_files(run_key: str) -> dict:
+    """``{student id: {name: path}}`` from the run's kept submissions ZIP, extracted once per
+    session; ``{}`` when none was kept (persistence off, or a run saved before it existed)."""
+    cache = st.session_state.setdefault("saved_source_files_by_key", {})
+    if run_key not in cache:
+        cache[run_key] = (results_store.load_submissions(run_key) or {}) if run_key else {}
+    return cache[run_key]
+
+
+def _source_files_for(run_key: str, student_id: str) -> Optional[dict]:
+    """The student's submitted files: this session's inputs, else the kept copy after a restart."""
+    submission = _submission_for(run_key, student_id)
+    if submission is not None:
+        return submission.files
+    return _saved_source_files(run_key).get(student_id)
+
+
 def _greeting_name(run_key: str, student_id: str) -> Optional[str]:
     """The name to greet the student by: none for a loose file (its name is a file name)."""
     submission = _submission_for(run_key, student_id)
@@ -4148,7 +4169,7 @@ def _student_drawer(student_id: str, result, run_key: str = "") -> None:
     display_rubric_assessment_result(
         result, student_id, greeting_name=greeting,
         correlation_id=(getattr(result, "llm_request", None) or {}).get("correlation_id"),
-        source_files=getattr(_submission_for(run_key, student_id), "files", None),
+        source_files=_source_files_for(run_key, student_id),
         run_key=run_key, student_id=student_id)
     _render_effort_compare(student_id, result, run_key)
     _render_result_card_export(student_id, result, greeting)
@@ -4560,6 +4581,56 @@ def _get_brightspace_submissions_zip() -> tuple[Optional[str], Optional[str]]:
     return path, name
 
 
+def _build_results_report(run_key: str, all_results: list, course_name: str) -> Optional[str]:
+    """Write the run's static results report to a temp file and return its path (``None`` on
+    failure: the hand-back ZIP is still built without it). The path is kept with the ZIP's,
+    so a regrade that drops the ZIP rebuilds the report too."""
+    try:
+        from cqc_cpcc.version import get_version
+
+        inputs = st.session_state.get("grading_inputs_by_key", {}).get(run_key, {})
+        kwargs = inputs.get("kwargs", {})
+        checklist = kwargs.get("requirements") or st.session_state.get("active_requirement_checklist")
+        requirement_texts = {r.id.strip().upper(): r.text for r in (checklist.requirements if checklist else [])}
+        greeting_names = {sid: _greeting_name(run_key, sid) or "" for sid, _ in all_results}
+        html_text = results_report.build_results_report_html(
+            all_results,
+            title=f"{course_name or 'Grading'} results",
+            meta={"Course": course_name, "Model": kwargs.get("model_name"), "Effort": kwargs.get("effort"),
+                  "App version": get_version()},
+            failed=st.session_state.grading_failures_by_key.get(run_key, []),
+            greeting_names=greeting_names,
+            source_files_by_student={sid: _source_files_for(run_key, sid) for sid, _ in all_results},
+            workspace=(solution_view.session_workspace(run_key)
+                       or results_store.load_execution_workspace(run_key)),
+            requirement_texts=requirement_texts,
+        )
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".html", mode="w", encoding="utf-8")
+        with tmp:
+            tmp.write(html_text)
+        os.chmod(tmp.name, 0o600)
+        st.session_state.setdefault("results_report_path_by_key", {})[run_key] = tmp.name
+        return tmp.name
+    except Exception as e:  # noqa: BLE001 - the report is extra; never lose the hand-back ZIP over it
+        logger.warning(f"Could not build the results report: {type(e).__name__}", exc_info=True)
+        return None
+
+
+def _results_report_download(run_key: str, course_name: str) -> None:
+    """The report on its own (it is also inside the ZIP), beside the ZIP download."""
+    path = st.session_state.get("results_report_path_by_key", {}).get(run_key)
+    if not path or not os.path.exists(path):
+        return
+    with open(path, "rb") as f:
+        st.download_button(
+            "Results report (.html)", data=f.read(), icon=":material/web:",
+            file_name=f"{sanitize_filename(course_name or 'Grading')}_Results_Report_"
+                      f"{datetime.now().strftime('%Y%m%d_%H%M')}.html",
+            mime="text/html", key=f"download_results_report_{run_key}",
+            help="One file to open later in a browser: scores, errors, output comparison and code, "
+                 "with Run in OneCompiler. It holds student names, scores and code: keep it private.")
+
+
 def _generate_feedback_docs_and_zip(
         all_results: list[tuple[str, RubricAssessmentResult]],
         course_name: str,
@@ -4605,6 +4676,7 @@ def _generate_feedback_docs_and_zip(
             "📥 Download All Feedback (.zip)",
             zip_filename
         )
+        _results_report_download(run_key, course_name)
         return
 
     with st.spinner("Generating Word documents..."):
@@ -4736,6 +4808,12 @@ def _generate_feedback_docs_and_zip(
                     arcname=f"Student_Submissions/{submissions_zip_name}",
                 )
 
+            # The static results report (Results_Report.html), at the ZIP root.
+            report_path = _build_results_report(run_key, all_results, course_name)
+            if report_path:
+                zip_file_path = add_file_to_zip(zip_file_path, report_path,
+                                                arcname=results_report.REPORT_FILENAME)
+
             # Cache the ZIP file path in session state
             st.session_state.feedback_zip_bytes_by_key[run_key] = zip_file_path
 
@@ -4752,6 +4830,7 @@ def _generate_feedback_docs_and_zip(
                 zip_filename
             )
 
+            _results_report_download(run_key, course_name)
             st.caption(f"{len(doc_files)} Word document(s): {', '.join([fn for fn, _ in doc_files])}")
 
         except Exception as e:
