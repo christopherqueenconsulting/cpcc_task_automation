@@ -539,7 +539,15 @@ from `diff_view.align_rows` with synced panes, or the unified diff) and Code, pl
 OneCompiler** sends that student's code to onecompiler.com, only on that click. The page
 never regrades and never calls a model. Every value is JSON drawn with `textContent`; the
 page's Content-Security-Policy allows only its own script (by SHA-256) and OneCompiler
-frames, and fonts only as `data:` (the app's own fonts are inlined). The report is rebuilt whenever the ZIP is (a regrade drops both).
+frames, and fonts only as `data:` (the app's own fonts from `src/cqc_streamlit_app/static/fonts`,
+SIL OFL, licences beside them, are inlined, about 100 KB; a missing font file falls back to system
+fonts with a log warning). Side-by-side rows are capped at `MAX_REPORT_SIDE_ROWS` (50,000) per
+report; later cases say so and show the unified diff. The report is rebuilt whenever the ZIP is (a regrade drops both).
+
+Debugging: each build logs `Results report built: N bytes`. When the ZIP has no report, the
+log has `Could not build the results report` with the exception; the ZIP is still built.
+Rollback: `git revert` the merge commit; report files already handed back keep the look they
+were built with.
 
 Code after a restart: `results_store.save_submissions` keeps each run's previewable source
 files as `<run_key>.submissions.zip` beside the saved results (decision 2B, 2026-11-11), and

@@ -306,7 +306,14 @@
     const box = el("div");
     const draw = () => {
       box.replaceChildren();
-      if (c.side && diffMode === "side") {
+      if (c.side && c.side.skipped)
+        box.append(
+          el("p", {
+            cls: "muted",
+            text: "Side by side left out: this report reached its size limit. The unified diff is shown.",
+          }),
+        );
+      if (c.side && c.side.rows && diffMode === "side") {
         box.append(sideBySide(c.side));
       } else if (c.diff.kind === "full") {
         box.append(
@@ -321,7 +328,7 @@
       }
     };
     const wrap = el("div");
-    if (c.side) {
+    if (c.side && c.side.rows) {
       const seg = el("div", { cls: "seg", role: "radiogroup", "aria-label": "Diff view for case " + c.id });
       const name = "dv-" + c.id + "-" + Math.random().toString(36).slice(2);
       const inputs = [];
@@ -383,7 +390,7 @@
           }),
         );
       if (c.has_input) body.append(el("div", { cls: "label", text: "Input" }), pre(c.input));
-      if (!c.side) {
+      if (!(c.side && c.side.rows)) {
         body.append(el("div", { cls: "label", text: "Expected output (your solution)" }), pre(c.expected));
         body.append(el("div", { cls: "label", text: "Student output" }), pre(c.actual));
       }

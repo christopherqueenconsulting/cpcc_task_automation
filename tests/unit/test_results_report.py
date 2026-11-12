@@ -200,3 +200,31 @@ def test_placeholder_names_in_values_are_inserted_as_they_stand(tmp_path):
     csp = html.unescape(re.search(r'http-equiv="Content-Security-Policy" content="([^"]+)"', page).group(1))
     digest = base64.b64encode(hashlib.sha256(results_report._SCRIPT.encode()).digest()).decode()
     assert f"'sha256-{digest}'" in csp
+
+
+@pytest.mark.unit
+def test_the_report_row_budget_skips_later_cases_without_aligning_them(monkeypatch):
+    calls = []
+    real = diff_view.align_rows
+    monkeypatch.setattr(diff_view, "align_rows", lambda e, a: calls.append(1) or real(e, a))
+    budget = [3]
+    first = results_report._case_side("a\nb\n", "a\nc\n", budget)
+    assert first["rows"] and budget[0] == 0
+    assert results_report._case_side("x\n", "y\n", budget) == {"skipped": True}
+    assert len(calls) == 1
+
+
+@pytest.mark.unit
+def test_a_missing_font_falls_back_to_system_fonts(monkeypatch, tmp_path):
+    monkeypatch.setattr(results_report, "_FONTS", tmp_path)
+    assert results_report._font_face("x", "missing.woff2", "400") == ""
+
+
+@pytest.mark.unit
+def test_the_fonts_and_assets_ship_beside_the_module():
+    here = results_report._FONTS
+    for name in ("LibreFranklin-Variable.woff2", "LibreBaskerville-Regular.woff2",
+                 "LibreBaskerville-Bold.woff2", "OFL-LibreFranklin.txt", "OFL-LibreBaskerville.txt"):
+        assert (here / name).is_file(), name
+    for name in ("results_report.css", "results_report.js"):
+        assert (results_report._ASSETS / name).is_file(), name
