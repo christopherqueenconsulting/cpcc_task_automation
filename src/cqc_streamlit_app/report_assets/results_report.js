@@ -5,22 +5,31 @@
   function el(tag, attrs, ...kids) {
     const node = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs || {})) {
-      if (k === "text") node.textContent = v; else if (k === "cls") node.className = v; else node.setAttribute(k, v);
+      if (k === "text") node.textContent = v;
+      else if (k === "cls") node.className = v;
+      else node.setAttribute(k, v);
     }
     for (const kid of kids) if (kid != null) node.append(kid);
     return node;
   }
-  function pre(text, cls) { return el("pre", { cls: cls || "wrap", text: text === "" ? "(nothing)" : text }); }
+  function pre(text, cls) {
+    return el("pre", { cls: cls || "wrap", text: text === "" ? "(nothing)" : text });
+  }
   function codeBlock(text) {
     const node = el("pre", { cls: "code" });
-    for (const line of text.replace(/\n$/, "").split("\n")) node.append(el("span", { cls: "l", text: line || " " }));
+    for (const line of text.replace(/\n$/, "").split("\n"))
+      node.append(el("span", { cls: "l", text: line || " " }));
     return node;
   }
   function diffBlock(text) {
     const node = el("pre", { cls: "diff" });
     for (const line of text.split("\n")) {
-      const cls = line.startsWith("+") && !line.startsWith("+++") ? "a"
-                : line.startsWith("-") && !line.startsWith("---") ? "d" : "";
+      const cls =
+        line.startsWith("+") && !line.startsWith("+++")
+          ? "a"
+          : line.startsWith("-") && !line.startsWith("---")
+            ? "d"
+            : "";
       node.append(el("span", { cls: cls, text: line + "\n" }));
     }
     return node;
@@ -29,11 +38,14 @@
     const t = el("table");
     t.append(el("thead", {}, el("tr", {}, ...headers.map((h) => el("th", { text: h })))));
     const body = el("tbody");
-    for (const row of rows) body.append(el("tr", {}, ...row.map((c) => el("td", { cls: "wrap", text: String(c) }))));
+    for (const row of rows)
+      body.append(el("tr", {}, ...row.map((c) => el("td", { cls: "wrap", text: String(c) }))));
     t.append(body);
     return t;
   }
-  function fmt(n) { return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100); }
+  function fmt(n) {
+    return Number.isInteger(n) ? String(n) : String(Math.round(n * 100) / 100);
+  }
 
   // ---- header ----
   $("#title").textContent = DATA.title;
@@ -44,35 +56,59 @@
   const counted = DATA.students.filter((s) => s.status === "Graded");
   const avg = counted.length ? counted.reduce((a, s) => a + s.earned, 0) / counted.length : 0;
   const possible = DATA.students.length ? DATA.students[0].possible : 0;
-  const tiles = [["Graded", counted.length], ["Needs review", DATA.students.length - counted.length],
-                 ["Failed", DATA.failed.length], ["Average", fmt(avg) + "/" + possible]];
-  for (const [label, value] of tiles) $("#tiles").append(el("div", { cls: "tile" }, el("b", { text: String(value) }), label));
+  const tiles = [
+    ["Graded", counted.length],
+    ["Needs review", DATA.students.length - counted.length],
+    ["Failed", DATA.failed.length],
+    ["Average", fmt(avg) + "/" + possible],
+  ];
+  for (const [label, value] of tiles)
+    $("#tiles").append(el("div", { cls: "tile" }, el("b", { text: String(value) }), label));
   if (DATA.failed.length) $("#failed").textContent = "Grading failed for: " + DATA.failed.join(", ");
 
   // ---- student list ----
-  let sortKey = "id", sortDir = 1, selected = null;
+  let sortKey = "id",
+    sortDir = 1,
+    selected = null;
   function drawList() {
     const q = $("#filter").value.trim().toLowerCase();
-    const rows = DATA.students.filter((s) => !q || s.id.toLowerCase().includes(q) || s.status.toLowerCase().includes(q));
+    const rows = DATA.students.filter(
+      (s) => !q || s.id.toLowerCase().includes(q) || s.status.toLowerCase().includes(q),
+    );
     rows.sort((a, b) => (a[sortKey] > b[sortKey] ? 1 : a[sortKey] < b[sortKey] ? -1 : 0) * sortDir);
     const body = $("#students tbody");
     body.replaceChildren();
     for (const s of rows) {
-      const tr = el("tr", { tabindex: "0" },
-        el("td", { text: s.id }), el("td", { cls: s.status === "Graded" ? "" : "flag", text: s.status }),
-        el("td", { text: fmt(s.earned) + "/" + s.possible + " (" + s.pct + "%)" }), el("td", { text: s.level }),
-        el("td", { text: String(s.major) }), el("td", { text: String(s.minor) }), el("td", { text: s.output_label }));
+      const tr = el(
+        "tr",
+        { tabindex: "0" },
+        el("td", { text: s.id }),
+        el("td", { cls: s.status === "Graded" ? "" : "flag", text: s.status }),
+        el("td", { text: fmt(s.earned) + "/" + s.possible + " (" + s.pct + "%)" }),
+        el("td", { text: s.level }),
+        el("td", { text: String(s.major) }),
+        el("td", { text: String(s.minor) }),
+        el("td", { text: s.output_label }),
+      );
       if (selected === s) tr.className = "sel";
-      const open = () => { selected = s; drawList(); drawStudent(s); };
+      const open = () => {
+        selected = s;
+        drawList();
+        drawStudent(s);
+      };
       tr.addEventListener("click", open);
-      tr.addEventListener("keydown", (e) => { if (e.key === "Enter") open(); });
+      tr.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") open();
+      });
       body.append(tr);
     }
   }
   for (const th of document.querySelectorAll("th[data-sort]")) {
     th.addEventListener("click", () => {
       const key = th.getAttribute("data-sort");
-      sortDir = key === sortKey ? -sortDir : 1; sortKey = key; drawList();
+      sortDir = key === sortKey ? -sortDir : 1;
+      sortKey = key;
+      drawList();
     });
   }
   $("#filter").addEventListener("input", drawList);
@@ -86,7 +122,8 @@
       b.addEventListener("click", () => {
         buttons.forEach((x) => x.setAttribute("aria-selected", "false"));
         b.setAttribute("aria-selected", "true");
-        area.replaceChildren(); draw(area);
+        area.replaceChildren();
+        draw(area);
       });
       return b;
     });
@@ -96,30 +133,59 @@
   }
   function drawRunner(container, code, notice) {
     if (!code.runner) {
-      if (code.files.length) container.append(el("p", { cls: "muted", text: "These files cannot be run in OneCompiler." }));
+      if (code.files.length)
+        container.append(el("p", { cls: "muted", text: "These files cannot be run in OneCompiler." }));
       return;
     }
     const box = el("div");
     const run = el("button", { cls: "btn", type: "button", text: "Run in OneCompiler" });
     const actions = el("p", {}, run);
-    if (code.gdb) { actions.append(" "); actions.append(el("a", { href: code.gdb, target: "_blank", rel: "noopener noreferrer", text: "Open OnlineGDB (paste the code there)" })); }
+    if (code.gdb) {
+      actions.append(" ");
+      actions.append(
+        el("a", {
+          href: code.gdb,
+          target: "_blank",
+          rel: "noopener noreferrer",
+          text: "Open OnlineGDB (paste the code there)",
+        }),
+      );
+    }
     container.append(actions, el("p", { cls: "muted small", text: notice }), box);
     run.addEventListener("click", () => {
-      if (box.firstChild) { box.replaceChildren(); run.textContent = "Run in OneCompiler"; return; }
+      if (box.firstChild) {
+        box.replaceChildren();
+        run.textContent = "Run in OneCompiler";
+        return;
+      }
       run.textContent = "Close runner";
-      const frame = el("iframe", { cls: "runner", src: code.runner.src, title: "OneCompiler code runner", allow: "clipboard-write" });
+      const frame = el("iframe", {
+        cls: "runner",
+        src: code.runner.src,
+        title: "OneCompiler code runner",
+        allow: "clipboard-write",
+      });
       frame.addEventListener("load", () => {
         let sent = 0;
-        const send = () => { frame.contentWindow.postMessage(code.runner.payload, DATA.runner_origin); if (++sent < 3) setTimeout(send, 500); };
+        const send = () => {
+          frame.contentWindow.postMessage(code.runner.payload, DATA.runner_origin);
+          if (++sent < 3) setTimeout(send, 500);
+        };
         send();
       });
       box.append(frame);
     });
   }
   function drawCode(container, code) {
-    if (!code.available) { container.append(el("p", { cls: "muted", text: DATA.no_code_text })); return; }
-    if (!code.files.length) { container.append(el("p", { cls: "muted", text: "No previewable source files." })); }
-    if (code.skipped.length) container.append(el("p", { cls: "muted small", text: "Not shown: " + code.skipped.join(", ") }));
+    if (!code.available) {
+      container.append(el("p", { cls: "muted", text: DATA.no_code_text }));
+      return;
+    }
+    if (!code.files.length) {
+      container.append(el("p", { cls: "muted", text: "No previewable source files." }));
+    }
+    if (code.skipped.length)
+      container.append(el("p", { cls: "muted small", text: "Not shown: " + code.skipped.join(", ") }));
     const picker = el("div", { cls: "files" });
     const view = el("div");
     const buttons = code.files.map((f) => {
@@ -128,7 +194,13 @@
         buttons.forEach((x) => x.setAttribute("aria-pressed", "false"));
         b.setAttribute("aria-pressed", "true");
         view.replaceChildren();
-        if (f.truncated) view.append(el("p", { cls: "muted small", text: "Showing the first part of a long file; it is left out of a run." }));
+        if (f.truncated)
+          view.append(
+            el("p", {
+              cls: "muted small",
+              text: "Showing the first part of a long file; it is left out of a run.",
+            }),
+          );
         view.append(codeBlock(f.content));
       });
       return b;
@@ -142,53 +214,133 @@
   function drawOutput(container, out) {
     container.append(el("p", { text: out.status }));
     container.append(el("p", {}, el("b", { text: "Result: " }), out.label));
-    if (out.cannot_verify) container.append(el("p", { cls: "muted", text: "The check could not change the grade: " + out.cannot_verify }));
+    if (out.cannot_verify)
+      container.append(
+        el("p", { cls: "muted", text: "The check could not change the grade: " + out.cannot_verify }),
+      );
     if (!out.cases.length) return;
-    container.append(table(["Case", "Label", "Verdict", "Detail"], out.cases.map((c) => [c.id, c.label, c.verdict, c.detail])));
+    container.append(
+      table(
+        ["Case", "Label", "Verdict", "Detail"],
+        out.cases.map((c) => [c.id, c.label, c.verdict, c.detail]),
+      ),
+    );
     for (const c of out.cases) {
       if (c.match) continue;
-      const card = el("div", { cls: "card" }, el("h3", { text: "Case " + c.id + (c.label ? ": " + c.label : "") + " - " + c.verdict }));
-      if (c.cut) card.append(el("p", { cls: "flag", text: "This program printed more than 64 KB; only the first 64 KB was kept." }));
-      if (c.has_input) { card.append(el("div", { cls: "muted", text: "Input" }), pre(c.input)); }
+      const card = el(
+        "div",
+        { cls: "card" },
+        el("h3", { text: "Case " + c.id + (c.label ? ": " + c.label : "") + " - " + c.verdict }),
+      );
+      if (c.cut)
+        card.append(
+          el("p", {
+            cls: "flag",
+            text: "This program printed more than 64 KB; only the first 64 KB was kept.",
+          }),
+        );
+      if (c.has_input) {
+        card.append(el("div", { cls: "muted", text: "Input" }), pre(c.input));
+      }
       card.append(el("div", { cls: "muted", text: "Expected output (your solution)" }), pre(c.expected));
       card.append(el("div", { cls: "muted", text: "Student output" }), pre(c.actual));
-      if (c.diff.kind === "full") { card.append(el("div", { cls: "muted", text: "Differences (- expected, + student)" }), diffBlock(c.diff.text)); }
-      else if (c.diff.kind === "excerpt") { card.append(el("div", { cls: "muted", text: "Differences, short excerpt (the full outputs were not kept)" }), diffBlock(c.diff.text)); }
-      else if (c.diff.kind === "same") { card.append(el("p", { cls: "muted", text: "No differences in the stored text after normalization." })); }
+      if (c.diff.kind === "full") {
+        card.append(
+          el("div", { cls: "muted", text: "Differences (- expected, + student)" }),
+          diffBlock(c.diff.text),
+        );
+      } else if (c.diff.kind === "excerpt") {
+        card.append(
+          el("div", { cls: "muted", text: "Differences, short excerpt (the full outputs were not kept)" }),
+          diffBlock(c.diff.text),
+        );
+      } else if (c.diff.kind === "same") {
+        card.append(
+          el("p", { cls: "muted", text: "No differences in the stored text after normalization." }),
+        );
+      }
       container.append(card);
     }
   }
   function drawStudent(s) {
     const d = $("#detail");
     d.replaceChildren(el("h2", { text: s.id }));
-    d.append(el("div", { cls: "tiles" },
-      el("div", { cls: "tile" }, el("b", { text: fmt(s.earned) + "/" + s.possible }), "Score"),
-      el("div", { cls: "tile" }, el("b", { text: s.pct + "%" }), "Percent"),
-      el("div", { cls: "tile" }, el("b", { text: s.level || "—" }), "Level"),
-      el("div", { cls: "tile" }, el("b", { text: s.major + " / " + s.minor }), "Errors (major / minor)")));
-    if (s.status !== "Graded") d.append(el("p", { cls: "flag", text: s.status + (s.review_reason ? ": " + s.review_reason : "") }));
+    d.append(
+      el(
+        "div",
+        { cls: "tiles" },
+        el("div", { cls: "tile" }, el("b", { text: fmt(s.earned) + "/" + s.possible }), "Score"),
+        el("div", { cls: "tile" }, el("b", { text: s.pct + "%" }), "Percent"),
+        el("div", { cls: "tile" }, el("b", { text: s.level || "—" }), "Level"),
+        el("div", { cls: "tile" }, el("b", { text: s.major + " / " + s.minor }), "Errors (major / minor)"),
+      ),
+    );
+    if (s.status !== "Graded")
+      d.append(el("p", { cls: "flag", text: s.status + (s.review_reason ? ": " + s.review_reason : "") }));
     if (s.model) d.append(el("p", { cls: "muted small", text: "Graded with " + s.model }));
     const panels = [
-      ["Feedback", (c) => {
-        const fb = el("div", { cls: "card feedback" });
-        fb.innerHTML = s.feedback_html;  // escaped by _markdown_to_html
-        c.append(el("p", { cls: "muted small", text: "What the student sees (no scores)." }), fb,
-                 el("h3", { text: "Overall summary" }), pre(s.overall));
-      }],
-      ["Criteria", (c) => c.append(table(["Criterion", "Points", "Level", "Feedback"], s.criteria.map((x) => [x.name, x.points, x.level, x.feedback])))],
-      ["Errors", (c) => {
-        if (!s.errors.length) c.append(el("p", { cls: "muted", text: "No errors detected." }));
-        else c.append(table(["Severity", "Error", "Code", "Times", "Details", "Found by"], s.errors.map((e) => [e.severity, e.name, e.code, e.times, e.details, e.source])));
-        for (const e of s.errors) if (e.diagnostics) c.append(el("h3", { text: "Compiler output for " + e.code }), pre(e.diagnostics));
-        if (s.notes.length) {
-          c.append(el("h3", { text: "Scoring notes" }));
-          c.append(table(["Stage", "Action", "Error", "Reason", "State"], s.notes.map((n) => [n.stage, n.action, n.code, n.reason, n.state])));
-        }
-      }],
-      ["Requirements", (c) => {
-        if (!s.requirements.length) c.append(el("p", { cls: "muted", text: "No requirement checklist was used for this result." }));
-        else c.append(table(["Id", "Requirement", "Status", "Evidence"], s.requirements.map((r) => [r.id, r.text, r.status, r.evidence])));
-      }],
+      [
+        "Feedback",
+        (c) => {
+          const fb = el("div", { cls: "card feedback" });
+          fb.innerHTML = s.feedback_html; // escaped by _markdown_to_html
+          c.append(
+            el("p", { cls: "muted small", text: "What the student sees (no scores)." }),
+            fb,
+            el("h3", { text: "Overall summary" }),
+            pre(s.overall),
+          );
+        },
+      ],
+      [
+        "Criteria",
+        (c) =>
+          c.append(
+            table(
+              ["Criterion", "Points", "Level", "Feedback"],
+              s.criteria.map((x) => [x.name, x.points, x.level, x.feedback]),
+            ),
+          ),
+      ],
+      [
+        "Errors",
+        (c) => {
+          if (!s.errors.length) c.append(el("p", { cls: "muted", text: "No errors detected." }));
+          else
+            c.append(
+              table(
+                ["Severity", "Error", "Code", "Times", "Details", "Found by"],
+                s.errors.map((e) => [e.severity, e.name, e.code, e.times, e.details, e.source]),
+              ),
+            );
+          for (const e of s.errors)
+            if (e.diagnostics)
+              c.append(el("h3", { text: "Compiler output for " + e.code }), pre(e.diagnostics));
+          if (s.notes.length) {
+            c.append(el("h3", { text: "Scoring notes" }));
+            c.append(
+              table(
+                ["Stage", "Action", "Error", "Reason", "State"],
+                s.notes.map((n) => [n.stage, n.action, n.code, n.reason, n.state]),
+              ),
+            );
+          }
+        },
+      ],
+      [
+        "Requirements",
+        (c) => {
+          if (!s.requirements.length)
+            c.append(el("p", { cls: "muted", text: "No requirement checklist was used for this result." }));
+          else
+            c.append(
+              table(
+                ["Id", "Requirement", "Status", "Evidence"],
+                s.requirements.map((r) => [r.id, r.text, r.status, r.evidence]),
+              ),
+            );
+        },
+      ],
     ];
     if (s.output) panels.push(["Output", (c) => drawOutput(c, s.output)]);
     panels.push(["Code", (c) => drawCode(c, s.code)]);
@@ -201,14 +353,27 @@
     const body = el("div");
     const toggle = el("button", { cls: "btn secondary", type: "button", text: "Show solution" });
     toggle.addEventListener("click", () => {
-      if (body.firstChild) { body.replaceChildren(); toggle.textContent = "Show solution"; return; }
+      if (body.firstChild) {
+        body.replaceChildren();
+        toggle.textContent = "Show solution";
+        return;
+      }
       toggle.textContent = "Hide solution";
       drawCode(body, DATA.solution);
       if (DATA.solution.cases.length) {
         body.append(el("h3", { text: "Test cases" }));
-        for (const c of DATA.solution.cases) body.append(el("div", { cls: "card" },
-          el("b", { text: c.id + (c.label ? ": " + c.label : "") }), el("div", { cls: "muted", text: "Input" }), pre(c.input),
-          el("div", { cls: "muted", text: "Expected output" }), pre(c.expected)));
+        for (const c of DATA.solution.cases)
+          body.append(
+            el(
+              "div",
+              { cls: "card" },
+              el("b", { text: c.id + (c.label ? ": " + c.label : "") }),
+              el("div", { cls: "muted", text: "Input" }),
+              pre(c.input),
+              el("div", { cls: "muted", text: "Expected output" }),
+              pre(c.expected),
+            ),
+          );
       }
     });
     sec.append(toggle, body);
@@ -216,5 +381,9 @@
   }
 
   drawList();
-  if (DATA.students.length) { selected = DATA.students[0]; drawList(); drawStudent(selected); }
+  if (DATA.students.length) {
+    selected = DATA.students[0];
+    drawList();
+    drawStudent(selected);
+  }
 })();
