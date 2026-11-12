@@ -2902,7 +2902,10 @@ def remember_results(run_key: str, grading_mode: str) -> None:
         # Keep the submitted code once per run, so the Code tab and the results report still
         # have it after a restart (decision 2B, 2026-11-11).
         if grading_mode != "errors_only" and submissions and not results_store.has_saved_submissions(run_key):
-            results_store.save_submissions(run_key, {sid: sub.files for sid, sub in submissions.items()})
+            try:
+                results_store.save_submissions(run_key, {sid: sub.files for sid, sub in submissions.items()})
+            except Exception as e:  # noqa: BLE001 - keeping the code is a convenience; the results are saved
+                logger.warning(f"Could not keep the submitted code for run {run_key[:8]}: {type(e).__name__}")
     except Exception as e:  # noqa: BLE001 - saving is a convenience; never lose the run over it
         logger.warning(f"Could not save grading results to disk: {type(e).__name__}")
 

@@ -545,7 +545,8 @@ Code after a restart: `results_store.save_submissions` keeps each run's previewa
 files as `<run_key>.submissions.zip` beside the saved results (decision 2B, 2026-11-11), and
 `_source_files_for` falls back to it when the session's inputs are gone, so the Code tab,
 the runner and the report keep working. Plan and decisions:
-`docs/plans/static-results-report.md`; data handling: `docs/PRIVACY_AND_TELEMETRY.md`.
+`docs/plans/static-results-report.md`; data handling: `docs/PRIVACY_AND_TELEMETRY.md`;
+purge and rollback: its section "Kept code and the results report: purge and rollback".
 
 ### Writing Grades Back to BrightSpace
 

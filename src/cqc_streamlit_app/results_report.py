@@ -26,6 +26,7 @@ import base64
 import hashlib
 import html
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -224,18 +225,20 @@ def build_report_data(results: list, *, title: str, meta: Optional[dict] = None,
 def build_results_report_html(results: list, **kwargs) -> str:
     """The whole report page as one string. See :func:`build_report_data` for the arguments."""
     data = build_report_data(results, **kwargs)
-    # "<" becomes <, so nothing in a value can end the JSON's script element.
+    # Each "<" becomes the JSON escape \u003c, so nothing in a value can end the JSON's script element.
     data_json = json.dumps(data, ensure_ascii=False).replace("<", "\\u003c")
     script_hash = base64.b64encode(hashlib.sha256(_SCRIPT.encode("utf-8")).digest()).decode("ascii")
     csp = ("default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
            f"script-src 'sha256-{script_hash}'; frame-src {ONECOMPILER_ORIGIN}; base-uri 'none'; "
            "form-action 'none'")
-    return (_PAGE
-            .replace("__CSP__", html.escape(csp, quote=True))
-            .replace("__TITLE__", html.escape(data["title"]))
-            .replace("__STYLE__", _STYLE)
-            .replace("__DATA__", data_json)
-            .replace("__SCRIPT__", _SCRIPT))
+    values = {"CSP": html.escape(csp, quote=True), "TITLE": html.escape(data["title"]),
+              "STYLE": _STYLE, "DATA": data_json, "SCRIPT": _SCRIPT}
+    # One pass over the template only: a value that contains a placeholder name (student code
+    # with "__SCRIPT__" in it) is inserted as it stands and never substituted again.
+    return _PLACEHOLDER.sub(lambda m: values[m.group(1)], _PAGE)
+
+
+_PLACEHOLDER = re.compile(r"__(CSP|TITLE|STYLE|DATA|SCRIPT)__")
 
 
 _PAGE = """<!doctype html>

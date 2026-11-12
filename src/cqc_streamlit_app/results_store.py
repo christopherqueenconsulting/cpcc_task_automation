@@ -162,6 +162,15 @@ def _prune(directory: Path) -> None:
     for archive in directory.glob(f"*{SUBMISSIONS_SUFFIX}"):
         if not (directory / (archive.name[:-len(SUBMISSIONS_SUFFIX)] + ".json")).exists():
             archive.unlink(missing_ok=True)
+    # A write killed mid-way (power loss, SIGKILL) leaves its temp file; it may hold student
+    # data, so one older than STALE_TMP_SECONDS is removed. A younger one may still be in use.
+    cutoff = time.time() - STALE_TMP_SECONDS
+    for leftover in [*directory.glob(".run.*.tmp"), *directory.glob(".subs.*.tmp")]:
+        try:
+            if leftover.stat().st_mtime < cutoff:
+                leftover.unlink(missing_ok=True)
+        except OSError:
+            continue
 
 
 def delete_run(run_key: str) -> None:
@@ -181,6 +190,7 @@ _MANIFEST = "manifest.json"
 MAX_SUBMISSIONS_BYTES = 20 * 1024 * 1024  # uncompressed, all students together
 MAX_SUBMISSION_FILE_BYTES = 1024 * 1024
 MAX_SUBMISSION_ENTRIES = 5000
+STALE_TMP_SECONDS = 3600
 _SAFE_FILE_NAME = re.compile(r"[^\\/\x00-\x1f]{1,200}")
 
 
@@ -212,7 +222,7 @@ def save_submissions(run_key: str, files_by_student: dict) -> bool:
     directory.mkdir(parents=True, exist_ok=True)
     os.chmod(directory, 0o700)
     target = _submissions_path(run_key)
-    manifest, total, written = {}, 0, 0
+    manifest, total, written, skipped = {}, 0, 0, 0
     fd, tmp = tempfile.mkstemp(dir=directory, prefix=".subs.", suffix=".tmp")
     os.close(fd)
     try:
@@ -223,19 +233,27 @@ def save_submissions(run_key: str, files_by_student: dict) -> bool:
                 for name, ref in (files or {}).items():
                     base = os.path.basename(str(name))
                     if not _SAFE_FILE_NAME.fullmatch(base) or not _is_previewable(base):
+                        skipped += 1
                         continue
                     try:
                         if not isinstance(ref, str) or not os.path.isfile(ref):
+                            skipped += 1
                             continue
                         size = os.path.getsize(ref)
                         if size > MAX_SUBMISSION_FILE_BYTES or total + size > MAX_SUBMISSIONS_BYTES:
+                            skipped += 1
                             continue
                         archive.write(ref, arcname=f"{folder}/{base}")
                     except OSError:
+                        skipped += 1
                         continue
                     total += size
                     written += 1
             archive.writestr(_MANIFEST, json.dumps({"version": 1, "students": manifest}))
+        if skipped or not written:
+            # Run key prefix and counts only: never a student id or file name.
+            logger.warning("Kept submitted code for run %s: %d file(s) kept, %d not kept (not code, "
+                           "unreadable or over the size limits)", run_key[:8], written, skipped)
         if not written:
             os.unlink(tmp)
             return False

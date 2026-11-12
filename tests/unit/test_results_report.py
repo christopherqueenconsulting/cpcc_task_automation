@@ -146,3 +146,25 @@ def test_files_that_cannot_run_get_no_runner(tmp_path):
         [("Ada Example", _result())], title="T", source_files_by_student={"Ada Example": {"notes.txt": str(notes)}}))
     code = data["students"][0]["code"]
     assert code["available"] and code["runner"] is None and code["files"][0]["name"] == "notes.txt"
+
+
+@pytest.mark.unit
+def test_placeholder_names_in_values_are_inserted_as_they_stand(tmp_path):
+    names = "__SCRIPT__ __DATA__ __STYLE__ __CSP__ __TITLE__"
+    code = f"public class Main {{ // {names}\n}}\n"
+    result = _result()
+    result.overall_feedback = names
+    page = results_report.build_results_report_html(
+        [("Ada Example", result)], title=f"T {names}",
+        source_files_by_student={"Ada Example": _java(tmp_path, content=code)})
+    data = _data_of(page)  # still parses
+    student = data["students"][0]
+    assert student["code"]["files"][0]["content"] == code
+    assert student["overall"] == names
+    assert data["title"] == f"T {names}"
+    assert f"<title>T {names}</title>" in page
+    assert page.count(results_report._SCRIPT) == 1
+    assert page.count(results_report._STYLE) == 1
+    csp = html.unescape(re.search(r'http-equiv="Content-Security-Policy" content="([^"]+)"', page).group(1))
+    digest = base64.b64encode(hashlib.sha256(results_report._SCRIPT.encode()).digest()).decode()
+    assert f"'sha256-{digest}'" in csp

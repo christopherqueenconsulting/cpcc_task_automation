@@ -2,6 +2,7 @@
 """Grading results saved locally across restarts (Christopher's decision, 2026-10-06)."""
 
 import os
+import time
 
 import pytest
 
@@ -181,3 +182,31 @@ def test_a_tampered_archive_cannot_write_outside_its_folder(tmp_path):
     loaded = results_store.load_submissions("abc123")
     assert loaded == {"Ada Example": {"Main.java": loaded["Ada Example"]["Main.java"]}}
     assert not list(tmp_path.rglob("evil.java"))
+
+
+@pytest.mark.unit
+def test_prune_removes_stale_temp_files_only():
+    directory = results_store.results_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    stale, fresh = directory / ".subs.old.tmp", directory / ".subs.new.tmp"
+    stale_run = directory / ".run.old.tmp"
+    for path in (stale, fresh, stale_run):
+        path.write_text("x")
+    old = time.time() - results_store.STALE_TMP_SECONDS - 60
+    os.utime(stale, (old, old))
+    os.utime(stale_run, (old, old))
+    results_store._prune(directory)
+    assert not stale.exists() and not stale_run.exists()
+    assert fresh.exists()
+
+
+@pytest.mark.unit
+def test_code_not_kept_is_logged_without_names(tmp_path, monkeypatch):
+    monkeypatch.setattr(results_store, "MAX_SUBMISSION_FILE_BYTES", 4)
+    messages = []
+    monkeypatch.setattr(results_store.logger, "warning", lambda msg, *args: messages.append(msg % args))
+    files = _files(tmp_path, "a", Big_dot_java="class Big {}", ok_dot_py="x=1")
+    assert results_store.save_submissions("abc123def", {"Ada Example": files})
+    assert messages == ["Kept submitted code for run abc123de: 1 file(s) kept, 1 not kept "
+                        "(not code, unreadable or over the size limits)"]
+    assert "Ada" not in messages[0] and "Big" not in messages[0]

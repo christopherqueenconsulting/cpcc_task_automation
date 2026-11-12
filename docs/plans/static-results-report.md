@@ -1,6 +1,8 @@
 # Plan: static results report (Results_Report.html in the hand-back ZIP)
 
-**Date**: 2026-11-11 · **Status**: Implemented (see the PR that adds `results_report.py`)
+**Date**: 2026-11-11 · **Status**: Implemented in PR #559, except step 5 (Safari and Firefox not checked) and the
+`docs/BRIGHTSPACE_AUTOMATION_HANDOFF.md` note from step 7 (not written). Where the design below
+changed during the build, it says what was built.
 
 ## Goal
 
@@ -13,15 +15,15 @@ regrades and never calls a model.
 
 | Need | Where it lives now | Reusable as-is? |
 |---|---|---|
-| Per-student view (Feedback, Criteria, Errors, Requirements, Output, Code) | `display_rubric_assessment_result`, `grade_assignment.py:3645` | No: Streamlit widgets. The data it reads is reusable. |
+| Per-student view (Feedback, Criteria, Errors, Requirements, Output, Code) | `display_rubric_assessment_result` in `grade_assignment.py` | No: Streamlit widgets. The data it reads is reusable. |
 | Student feedback text | `build_student_feedback` (`student_feedback_builder.py`) | Yes |
 | Instructor card with scores, Markdown to HTML | `result_card_export.py` (`result_card_markdown`, `_markdown_to_html`) | Yes |
 | Code files with language, truncation | `code_preview.collect_code_files` | Yes |
 | OneCompiler runner | `code_preview.build_onecompiler_payload` + `build_runner_html` (iframe + `postMessage` to `https://onecompiler.com`) | Yes: plain HTML/JS, no Streamlit |
 | Output check verdicts and diffs | `result.execution_report` (dict, saved in results JSON) + `execution_view.render_output_check` / `_diff_lines` | Data yes; renderer is Streamlit |
 | Test case inputs and expected output | the run's `execution_plan` in `grading_inputs_by_key`, or the saved `execution_workspace` (`results_store.load_execution_workspace`) | Yes |
-| Hand-back ZIP assembly | `_generate_feedback_docs_and_zip`, `grade_assignment.py:4563` (docs, summary xlsx/csv, BrightSpace submissions ZIP) | Add one file here |
-| ZIP cache invalidation on regrade | `_drop_derived_outputs`, `grade_assignment.py:4184` | Already drops the ZIP; the report rides on it |
+| Hand-back ZIP assembly | `_generate_feedback_docs_and_zip` in `grade_assignment.py` (docs, summary xlsx/csv, BrightSpace submissions ZIP) | Add one file here |
+| ZIP cache invalidation on regrade | `_drop_derived_outputs` in `grade_assignment.py` | Already drops the ZIP; the report rides on it |
 
 **Gap:** the saved results JSON (`results_store.save_run`) does not keep student code.
 `source_files` are temp paths in `grading_inputs_by_key[run_key]["submissions"]`. After an
@@ -31,20 +33,24 @@ is built today.
 
 ## Design
 
-1. **New pure module** `src/cqc_cpcc/results_report.py`:
-   `build_results_report_html(meta, results, code_by_student, cases) -> str`.
-   No Streamlit import, so it is unit-testable and reusable from a script.
-   - `meta`: course, assignment, date, model and effort, app version, points possible.
+1. **New module** `src/cqc_streamlit_app/results_report.py` (built there, not in `cqc_cpcc`,
+   because it reuses the output-check wording in `execution_view`):
+   `build_results_report_html(results, *, title, meta, failed, greeting_names,
+   source_files_by_student, workspace, requirement_texts) -> str`. No Streamlit call, so it
+   is unit-testable. The page's script and styles are in `report_assets/`.
    - `results`: `[(student_id, RubricAssessmentResult)]`.
-   - `code_by_student`: `{student_id: [CodeFile]}` from `collect_code_files`.
-   - `cases`: `{case_id: {label, stdin, expected_output}}` from the plan or saved workspace.
+   - `source_files_by_student`: `{student_id: StudentSubmission.files}`, read with
+     `collect_code_files`.
+   - `workspace`: the Solution tab's workspace (solution files and test cases), or `None`.
 2. **One file, no network except OneCompiler.** Inline CSS and vanilla JS. No CDN, so it
    opens offline and leaks nothing on open. Data goes in one
    `<script type="application/json" id="run-data">` block with every `</` escaped (the
    same rule `build_runner_html` uses). JS renders all text with `textContent`, never
    `innerHTML`, so student code and model text cannot inject markup.
-   CSP meta tag: `default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';
-   frame-src https://onecompiler.com; img-src data:`.
+   As built, the script is allowed by its SHA-256 hash instead of `'unsafe-inline'`:
+   `default-src 'none'; style-src 'unsafe-inline'; img-src data:; script-src 'sha256-…';
+   frame-src https://onecompiler.com; base-uri 'none'; form-action 'none'`. The template
+   is filled in one pass, so a value holding a placeholder name is never substituted again.
 3. **Layout** (mirrors the app): header with run metadata and totals; a sortable,
    filterable student table (Status, Score, Level, major/minor errors, Output verdict);
    clicking a row opens that student's panel with tabs:
@@ -71,21 +77,22 @@ is built today.
    - that nested ZIP exists only when submissions came from BrightSpace; uploaded files are
      never bundled (`_get_brightspace_submissions_zip`).
    The viewer and the OneCompiler button need the code text in the page, so it is embedded.
-   The cost is small: source text compresses well inside the hand-back ZIP. A Student
-   column note names the matching folder in `Student_Submissions/` for the original files.
+   The cost is small: source text compresses well inside the hand-back ZIP.
 8. **Code survives a restart (decision 2B, 2026-11-11), using Christopher's idea of keeping
    the submissions ZIP rather than copying files into the JSON.** When a run is saved,
-   `results_store` also keeps a copy of its submissions ZIP as
-   `<run_key>.submissions.zip` beside `<run_key>.json` (same owner-only directory, same
-   `persistence_enabled()` switch, so still off on Community Cloud; pruned and deleted with
-   its run). BrightSpace runs copy the fetched ZIP; uploaded runs write one in the same
-   folder-per-student layout. On restore, `extract_student_submissions_from_zip` (it already
-   reads that layout) rebuilds `source_files`, so the Code tab, the runner and the report
-   work again. The same reader also accepts the hand-back ZIP itself (it reads its
-   `Student_Submissions/*.zip`), which gives a later "load an old hand-back ZIP" path for
-   free if wanted.
+   `results_store` also keeps the run's submitted code as `<run_key>.submissions.zip`
+   beside `<run_key>.json` (same owner-only directory, same `persistence_enabled()` switch,
+   so still off on Community Cloud; pruned and deleted with its run).
+   As built: `remember_results` calls `results_store.save_submissions` once per run. It
+   writes one ZIP for both BrightSpace and uploaded runs, from each student's
+   `StudentSubmission.files`: numbered folders plus a `manifest.json` mapping folder to
+   student id, code and text files only. It does not copy the fetched BrightSpace ZIP, and
+   restore does not use `extract_student_submissions_from_zip`. When the session's inputs
+   are gone, `_source_files_for` reads the kept copy through `results_store.load_submissions`
+   (extracted once per session into a private temp folder). Rollback and purge:
+   `docs/PRIVACY_AND_TELEMETRY.md`, "Kept code and the results report: purge and rollback".
 9. **Size guard**: code is already capped by `MAX_PREVIEW_CHARS`, stdout by the execution
-   report caps. Log the report size; warn on the Hand back tab above 15 MB.
+   report caps. Not built: the report size is not logged and there is no 15 MB warning.
 
 ## Steps (each fits one session)
 
@@ -97,7 +104,7 @@ is built today.
 | 4 | Wire into the ZIP and the Hand back download button. AppTest: after grading, the ZIP lists `Results_Report.html`. Regrade one student, the rebuilt ZIP's report shows the new score. | `poetry run pytest -m unit` green |
 | 5 | Manual check: open the ZIP's report from disk in Chrome and Safari, click through two students, run one in OneCompiler. | Screenshots |
 | 6a | Failing tests for the kept submissions ZIP (tmp `CQC_GRADING_RESULTS_DIR`): saved beside the JSON with mode 0600; uploaded runs get a folder-per-student ZIP; pruning and `delete_run` remove it; persistence off writes nothing; restore rebuilds each student's files. | `poetry run pytest tests/unit/test_results_store.py` red |
-| 6b | Implement in `results_store.py` + `restore_saved_results`; Code tab works after an app restart. | 6a green; manual restart check |
+| 6b | Implement in `results_store.py` (`save_submissions`, `load_submissions`) and `grade_assignment._source_files_for`; Code tab works after an app restart. | 6a green; manual restart check |
 | 7 | Docs: `docs/PRIVACY_AND_TELEMETRY.md` (the report holds names, scores and code: keep it with the ZIP, never upload it; student code is now kept on disk with saved runs), `docs/ARCHITECTURE.md`, `docs/BRIGHTSPACE_AUTOMATION_HANDOFF.md` hand-back section. `python scripts/pii_guard.py` clean. | Guard passes; PR CI green |
 | 8 | Gauntlet `infra-runbook` (D, E, H) plus G for personal data, then merge. | JSON verdicts on the PR |
 
