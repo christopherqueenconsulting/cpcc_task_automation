@@ -35,7 +35,7 @@ markdownify = "^1"
 pexels-api = "^1"
 openpyxl = "^3"
 xlrd = "^2"
-pypdf = "^6"
+pypdf = ">=6,<8"
 pymupdf = "^1"
 posthog = {version = "^7", optional = true}
 
