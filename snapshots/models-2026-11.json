@@ -433,6 +433,34 @@
     "expiration_date": null,
     "prompt": "0.000001"
   },
+  "google/gemini-4-carbon": {
+    "canonical_slug": "google/gemini-4-carbon-20261110",
+    "completion": "0.00001",
+    "created": 1794326871,
+    "expiration_date": null,
+    "prompt": "0.000002"
+  },
+  "google/gemini-4-carbon:batch": {
+    "canonical_slug": "google/gemini-4-carbon-20261110",
+    "completion": "0.000005",
+    "created": 1794326871,
+    "expiration_date": null,
+    "prompt": "0.000001"
+  },
+  "google/gemini-4-hydrogen": {
+    "canonical_slug": "google/gemini-4-hydrogen-20261112",
+    "completion": "0.0000075",
+    "created": 1794506460,
+    "expiration_date": null,
+    "prompt": "0.0000015"
+  },
+  "google/gemini-4-hydrogen:batch": {
+    "canonical_slug": "google/gemini-4-hydrogen-20261112",
+    "completion": "0.00000375",
+    "created": 1794506460,
+    "expiration_date": null,
+    "prompt": "0.00000075"
+  },
   "google/gemini-nano-banana-2.1": {
     "canonical_slug": "google/gemini-nano-banana-2.1-20261006",
     "completion": "0.0000075",
@@ -470,7 +498,7 @@
   },
   "google/gemma-3-27b-it": {
     "canonical_slug": "google/gemma-3-27b-it",
-    "completion": "0.00000045",
+    "completion": "0.00000035",
     "created": 1741756359,
     "expiration_date": null,
     "prompt": "0.00000008"
@@ -484,10 +512,10 @@
   },
   "google/gemma-4-26b-a4b-it": {
     "canonical_slug": "google/gemma-4-26b-a4b-it-20260403",
-    "completion": "0.0000001",
+    "completion": "0.0000003",
     "created": 1775227989,
     "expiration_date": null,
-    "prompt": "0.00000008"
+    "prompt": "0.00000009"
   },
   "google/gemma-4-26b-a4b-it:free": {
     "canonical_slug": "google/gemma-4-26b-a4b-it-20260403",
@@ -654,14 +682,14 @@
     "canonical_slug": "openai/gpt-5-2025-08-07",
     "completion": "0.00001",
     "created": 1754587413,
-    "expiration_date": null,
+    "expiration_date": "2026-12-11",
     "prompt": "0.00000125"
   },
   "openai/gpt-5-image": {
     "canonical_slug": "openai/gpt-5-image",
     "completion": "0.00001",
     "created": 1760447986,
-    "expiration_date": null,
+    "expiration_date": "2026-12-11",
     "prompt": "0.00001"
   },
   "openai/gpt-5-image-mini": {
@@ -675,42 +703,42 @@
     "canonical_slug": "openai/gpt-5-mini-2025-08-07",
     "completion": "0.000002",
     "created": 1754587407,
-    "expiration_date": null,
+    "expiration_date": "2026-12-11",
     "prompt": "0.00000025"
   },
   "openai/gpt-5-mini:batch": {
     "canonical_slug": "openai/gpt-5-mini-2025-08-07",
     "completion": "0.000001",
     "created": 1754587407,
-    "expiration_date": null,
+    "expiration_date": "2026-12-11",
     "prompt": "0.000000125"
   },
   "openai/gpt-5-nano": {
     "canonical_slug": "openai/gpt-5-nano-2025-08-07",
     "completion": "0.0000004",
     "created": 1754587402,
-    "expiration_date": null,
+    "expiration_date": "2026-12-11",
     "prompt": "0.00000005"
   },
   "openai/gpt-5-nano:batch": {
     "canonical_slug": "openai/gpt-5-nano-2025-08-07",
     "completion": "0.0000002",
     "created": 1754587402,
-    "expiration_date": null,
+    "expiration_date": "2026-12-11",
     "prompt": "0.000000025"
   },
   "openai/gpt-5-pro": {
     "canonical_slug": "openai/gpt-5-pro-2025-10-06",
     "completion": "0.00012",
     "created": 1759776663,
-    "expiration_date": null,
+    "expiration_date": "2026-12-11",
     "prompt": "0.000015"
   },
   "openai/gpt-5-pro:batch": {
     "canonical_slug": "openai/gpt-5-pro-2025-10-06",
     "completion": "0.00006",
     "created": 1759776663,
-    "expiration_date": null,
+    "expiration_date": "2026-12-11",
     "prompt": "0.0000075"
   },
   "openai/gpt-5.1": {
@@ -976,7 +1004,7 @@
     "canonical_slug": "openai/gpt-5-2025-08-07",
     "completion": "0.000005",
     "created": 1754587413,
-    "expiration_date": null,
+    "expiration_date": "2026-12-11",
     "prompt": "0.000000625"
   },
   "openai/gpt-6-astra": {
@@ -1156,10 +1184,10 @@
   },
   "openai/gpt-oss-20b": {
     "canonical_slug": "openai/gpt-oss-20b",
-    "completion": "0.00000013",
+    "completion": "0.0000003",
     "created": 1754414229,
     "expiration_date": null,
-    "prompt": "0.00000003"
+    "prompt": "0.000000075"
   },
   "openai/gpt-oss-20b:batch": {
     "canonical_slug": "openai/gpt-oss-20b",
@@ -1179,7 +1207,7 @@
     "canonical_slug": "openai/o3-2025-04-16",
     "completion": "0.000008",
     "created": 1744823457,
-    "expiration_date": null,
+    "expiration_date": "2026-12-11",
     "prompt": "0.000002"
   },
   "openai/o3-mini:batch": {
@@ -1193,14 +1221,14 @@
     "canonical_slug": "openai/o3-pro-2025-06-10",
     "completion": "0.00008",
     "created": 1749598352,
-    "expiration_date": null,
+    "expiration_date": "2026-12-11",
     "prompt": "0.00002"
   },
   "openai/o3:batch": {
     "canonical_slug": "openai/o3-2025-04-16",
     "completion": "0.000004",
     "created": 1744823457,
-    "expiration_date": null,
+    "expiration_date": "2026-12-11",
     "prompt": "0.000001"
   },
   "openai/o4-mini:batch": {
