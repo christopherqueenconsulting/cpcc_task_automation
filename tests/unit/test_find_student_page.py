@@ -133,6 +133,27 @@ class TestDesignPieceU6:
         assert not app.exception, app.exception
         assert any("No student matches all 2 words" in c.value for c in app.caption)
 
+    @pytest.mark.parametrize("query,word_advice", [
+        ("nobody@example.edu", False),
+        ("9999999", False),
+        ("zzzz", True),
+    ])
+    def test_empty_result_message_fits_the_kind_of_search(self, query, word_advice):
+        app = self._app()
+        app.run()
+        app.text_input(key="find_student_query").input(query).run()
+        assert not app.exception, app.exception
+        text = " ".join(i.value for i in app.info)
+        assert ("fewer or shorter words" in text) is word_advice
+        if not word_advice:
+            assert "Refresh roster" in text
+
+    def test_partial_only_results_are_headed_as_closest_matches(self):
+        app = _app(FakeJob(PHASE_SUCCEEDED, dict(self.ROSTER)))
+        app.run()
+        app.text_input(key="find_student_query").input("ann baker").run()
+        assert any(h.value == "2 closest matches" for h in app.subheader)
+
     def test_results_persist_and_roster_is_read_only(self):
         app = self._app()
         app.run()

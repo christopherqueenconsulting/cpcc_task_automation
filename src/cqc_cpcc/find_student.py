@@ -26,12 +26,31 @@ _FUZZY_MIN_LEN = 4
 _FUZZY_RATIO = 0.8
 
 
+def _fold_char(ch: str) -> str:
+    """Drop the accent of a Latin letter (e -> e); keep every other character as it is."""
+    base = "".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c))
+    return base if base and base.isascii() else ch
+
+
 def name_tokens(text: str) -> list[str]:
-    """Lower-case, accent-free parts of a name or query: "Doe, Jo-Ann M." -> doe, jo, ann, m."""
-    folded = unicodedata.normalize("NFKD", text or "")
-    folded = "".join(ch for ch in folded if not unicodedata.combining(ch)).casefold()
+    """Lower-case, accent-free parts of a name or query: "Doe, Jo-Ann M." -> doe, jo, ann, m.
+
+    Letters of any script are kept (Cyrillic, Greek, CJK, o-slash, l-stroke), so those names are
+    found by themselves; only Latin accents are folded away.
+    """
+    folded = "".join(_fold_char(ch) for ch in (text or "")).casefold()
     folded = re.sub(r"['\u2019.]", "", folded)  # O'Brien -> obrien, "M." -> m
-    return [part for part in re.split(r"[^a-z0-9]+", folded) if part]
+    tokens: list[str] = []
+    current: list[str] = []
+    for ch in folded:
+        if unicodedata.category(ch)[0] in "LNM":  # letters, numbers and their combining marks
+            current.append(ch)
+        elif current:
+            tokens.append("".join(current))
+            current = []
+    if current:
+        tokens.append("".join(current))
+    return tokens
 
 
 def _word_score(word: str, token: str) -> float:

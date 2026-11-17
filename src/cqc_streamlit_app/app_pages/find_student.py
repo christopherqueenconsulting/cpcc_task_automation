@@ -121,23 +121,31 @@ def main():
     roster = [(sid, name, email, course) for sid, (name, email, course) in finder.get_student_info_items()]
     courses = sorted({course for *_, course in roster if course})
 
-    query = st.text_input("Search", key="find_student_query",
+    query = st.text_input("Search", key="find_student_query", max_chars=200,
                           placeholder="Email, student ID, or any part of a name",
                           help="An exact email, an exact student ID, or part of a name: a first, "
                                "middle or last name, or an initial, in any order. With several "
                                "words, students matching all of them come first; students "
-                               "matching only some are listed separately below.")
+                               "matching only some are listed separately below. A word of 4 or "
+                               "more letters can be one letter off; a shorter one must match the "
+                               "start of a name.")
     if query:
         groups = search_groups(finder, query)
         if groups:
             hits, words, rows = groups[0]
-            st.subheader(f"{len(rows)} match{'es' if len(rows) != 1 else ''}", anchor=False)
             if hits < words:
-                st.caption(f"No student matches all {words} words. Closest: {hits} of {words}.")
+                st.subheader(f"{len(rows)} closest match{'es' if len(rows) != 1 else ''}", anchor=False)
+                st.caption(f"No student matches all {words} words. These match {hits} of {words}.")
+            else:
+                st.subheader(f"{len(rows)} match{'es' if len(rows) != 1 else ''}", anchor=False)
             st.dataframe(_rows(rows), hide_index=True)
             for hits, words, rows in groups[1:]:
                 with st.expander(f"{len(rows)} matching {hits} of {words} words"):
                     st.dataframe(_rows(rows), hide_index=True)
+        elif "@" in query or query.strip().isdigit():
+            st.info("No student has that email or ID in the gathered rosters. Check it for "
+                    "typos, or use Refresh roster or turn off Active courses only.",
+                    icon=":material/search_off:")
         else:
             st.info("No student found. Try fewer or shorter words, such as a last name or "
                     "the start of a first name.", icon=":material/search_off:")

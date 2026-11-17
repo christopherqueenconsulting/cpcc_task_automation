@@ -243,6 +243,9 @@ class TestDynamicNameSearch:
         "5": ("O'Brien, Sean", "e@example.edu", "CTS105"),
         "6": ("Smyth, Joan", "f@example.edu", "CTS106"),
         "7": ("Pe\u00f1a, Rosa", "g@example.edu", "CTS107"),
+        "8": ("\u0418\u0432\u0430\u043d\u043e\u0432, \u041f\u0451\u0442\u0440", "h@example.edu", "CTS108"),
+        "9": ("\u00d8rsted, \u0141ukasz", "i@example.edu", "CTS109"),
+        "10": ("\u738b, \u5c0f\u660e", "j@example.edu", "CTS110"),
     }
 
     def _finder(self):
@@ -262,6 +265,11 @@ class TestDynamicNameSearch:
         ("obrien", ["5"]),                   # apostrophe ignored
         ("pena", ["7"]),                     # accents ignored
         ("smyth", ["6", "3"]),               # a one-letter difference still finds Smith, ranked lower
+        ("\u0438\u0432\u0430\u043d\u043e\u0432", ["8"]),   # Cyrillic name found by itself
+        ("\u041f\u0451\u0442\u0440", ["8"]),               # Cyrillic given name
+        ("\u00f8rsted", ["9"]),                 # o-slash has no ASCII fold; kept as is
+        ("\u0142ukasz", ["9"]),                 # l-stroke
+        ("\u738b", ["10"]),                      # CJK
         ("zzz", []),
         ("", []),
         ("  ,  ", []),
