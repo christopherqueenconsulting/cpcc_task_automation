@@ -142,8 +142,9 @@ the queue once its checks pass", and the queue entry belongs to whoever turned a
 
 `.github/workflows/dependabot-auto-merge.yml` turns it on for patch and minor bumps as the
 `cpcc-model-bot` GitHub App (App ID 5223949), never with `GITHUB_TOKEN`. When `GITHUB_TOKEN`
-turned it on, as `github-actions[bot]`, the PR was never queued: PRs #540 and #562 sat green for a
-day or more until someone queued them by hand, while PRs a person armed queued themselves. The
+turned it on, as `github-actions[bot]`, the PR was never queued: #540 sat green about 19 hours
+until someone queued it by hand, and #562 more than a day, while PRs a person armed queued
+themselves. The
 likely reason is that GitHub starts no workflow for an event that token causes.
 
 Not armed, by design: major bumps (`dependabot-triage.yml` posts a recommendation), the sandbox
@@ -163,9 +164,10 @@ Use a new key made for this, so it can be revoked without touching the model wor
 3. Store it and delete the local copy:
 
    ```bash
-   gh secret set MODEL_BOT_PRIVATE_KEY --app dependabot < ~/Downloads/cpcc-model-bot.*.private-key.pem
-   trash ~/Downloads/cpcc-model-bot.*.private-key.pem   # or: rm -P on macOS, shred -u on Linux
-   gh secret list --app dependabot                       # shows MODEL_BOT_PRIVATE_KEY
+   PEM=~/Downloads/cpcc-model-bot.2026-11-17.private-key.pem   # the exact file just downloaded
+   gh secret set MODEL_BOT_PRIVATE_KEY --app dependabot < "$PEM"
+   trash "$PEM"                      # or: rm -P on macOS, shred -u on Linux
+   gh secret list --app dependabot   # shows MODEL_BOT_PRIVATE_KEY
    ```
 
 The App ID is written in the workflow because the other workflows read `vars.MODEL_BOT_APP_ID`

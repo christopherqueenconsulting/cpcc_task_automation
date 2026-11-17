@@ -42,8 +42,8 @@ jobs:
       
       # master requires a merge queue, so "auto-merge" means "add to the queue once checks
       # pass", and the queue entry belongs to whoever armed auto-merge. Armed with
-      # GITHUB_TOKEN (github-actions[bot]) the PR was never queued (PRs #540 and #562 sat
-      # green for a day or more until queued by hand), while PRs armed by a person queued
+      # GITHUB_TOKEN (github-actions[bot]) the PR was never queued (#540 sat about 19 h until
+      # queued by hand; #562 more than a day), while PRs armed by a person queued
       # themselves. Likely reason: GitHub starts no workflow for an event that token causes.
       # Arm it as the cpcc-model-bot App.
       # Dependabot runs read only Dependabot secrets, so MODEL_BOT_PRIVATE_KEY must also be
