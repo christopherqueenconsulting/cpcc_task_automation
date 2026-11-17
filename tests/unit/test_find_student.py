@@ -213,30 +213,6 @@ class TestGetStudentByName:
     
     @patch('cqc_cpcc.find_student.MyColleges')
     @patch('cqc_cpcc.find_student.get_session_driver')
-    def test_requires_at_least_two_matching_parts(self, mock_get_driver, mock_my_colleges_class):
-        """Should require at least 2 name parts to match."""
-        mock_driver, mock_wait = MagicMock(), MagicMock()
-        mock_get_driver.return_value = (mock_driver, mock_wait)
-        
-        mock_mc_instance = MagicMock()
-        student_info = {
-            "123": ("Doe, John Michael", "john@email.com", "CTS101"),
-        }
-        mock_mc_instance.get_student_info.return_value = student_info
-        mock_my_colleges_class.return_value = mock_mc_instance
-        
-        finder = FindStudents()
-        
-        # Only one part matches - should not find
-        results = finder.get_student_by_name("John")
-        assert len(results) == 0
-        
-        # Two parts match - should find
-        results = finder.get_student_by_name("John Doe")
-        assert len(results) == 1
-    
-    @patch('cqc_cpcc.find_student.MyColleges')
-    @patch('cqc_cpcc.find_student.get_session_driver')
     def test_returns_empty_list_when_no_match(self, mock_get_driver, mock_my_colleges_class):
         """Should return empty list when name doesn't match."""
         mock_driver, mock_wait = MagicMock(), MagicMock()
@@ -253,6 +229,73 @@ class TestGetStudentByName:
         results = finder.get_student_by_name("Bob Smith")
         
         assert results == []
+
+
+@pytest.mark.unit
+class TestDynamicNameSearch:
+    """Names are matched by word, in any order and case, not as one strict string."""
+
+    ROSTER = {
+        "1": ("Doe, John Michael", "a@example.edu", "CTS101"),
+        "2": ("Doe, Jane A.", "b@example.edu", "CTS102"),
+        "3": ("Smith, Jane", "c@example.edu", "CTS103"),
+        "4": ("Garcia-Lopez, Maria", "d@example.edu", "CTS104"),
+        "5": ("O'Brien, Sean", "e@example.edu", "CTS105"),
+        "6": ("Smyth, Joan", "f@example.edu", "CTS106"),
+        "7": ("Pe\u00f1a, Rosa", "g@example.edu", "CTS107"),
+    }
+
+    def _finder(self):
+        return FindStudents(student_info=dict(self.ROSTER))
+
+    def _ids(self, query):
+        return [s[0] for s in self._finder().get_student_by_name(query)]
+
+    @pytest.mark.parametrize("query,expected", [
+        ("john", ["1"]),                     # first name alone
+        ("DOE", ["2", "1"]),                 # last name alone, any case; sorted by name
+        ("michael", ["1"]),                  # middle name alone
+        ("a", ["2"]),                        # an initial matches the start of a name part
+        ("m", ["1", "4"]),                   # Michael, Maria
+        ("jo", ["1", "6"]),                  # the start of a name
+        ("garcia", ["4"]),                   # one half of a hyphenated name
+        ("obrien", ["5"]),                   # apostrophe ignored
+        ("pena", ["7"]),                     # accents ignored
+        ("smyth", ["6", "3"]),               # a one-letter difference still finds Smith, ranked lower
+        ("zzz", []),
+        ("", []),
+        ("  ,  ", []),
+    ])
+    def test_single_word(self, query, expected):
+        assert self._ids(query) == expected
+
+    def test_more_matching_words_rank_first(self):
+        ranked = self._finder().rank_students_by_name("jane doe")
+        assert [(hits, words, s[0]) for hits, words, s in ranked] == [
+            (2, 2, "2"),  # Doe, Jane A.: both words
+            (1, 2, "1"),  # Doe, John Michael: Doe only
+            (1, 2, "3"),  # Smith, Jane: Jane only
+        ]
+
+    def test_word_order_comma_and_case_do_not_matter(self):
+        assert self._ids("John Doe") == self._ids("doe, JOHN") == self._ids("Doe John")
+        assert self._ids("john doe")[0] == "1"
+
+    def test_one_name_part_counts_for_one_word(self):
+        # "john john" is one distinct word, so it cannot score 2 on a single John.
+        ranked = self._finder().rank_students_by_name("john john")
+        assert [(hits, words) for hits, words, _ in ranked] == [(1, 1)]
+
+    def test_middle_initial_with_first_and_last(self):
+        ranked = self._finder().rank_students_by_name("doe jane a")
+        assert (ranked[0][0], ranked[0][1], ranked[0][2][0]) == (3, 3, "2")
+
+    def test_short_words_are_not_fuzzy(self):
+        # "jon" is a prefix of nothing here and too short for a close match to Joan/John.
+        assert self._ids("jon") == []
+
+    def test_existing_exact_two_word_search_still_works(self):
+        assert self._ids("John Doe")[0] == "1"
 
 
 @pytest.mark.unit

@@ -44,11 +44,13 @@ def live_view() -> None:
         st.rerun()
 
 
-def search(finder, query: str) -> list[tuple]:
-    """One search box: an email (has "@"), a student ID (digits) or a name (2+ words match).
+def search_groups(finder, query: str) -> list[tuple[int, int, list[tuple]]]:
+    """One search box: an email (has "@"), a student ID (digits) or a name.
 
-    Uses the finder's own matching (exact email and ID, the 2-token name rule); an email
-    is also tried case-insensitively.
+    Returns ``(hits, words, rows)`` groups, best first. An email or ID is one group. A name is
+    split into words (first, middle, last name or an initial, in any order, any case); each
+    group holds the students who match the same number of words, so full matches come first
+    and the ones that match only some of the words follow in their own groups.
     """
     query = (query or "").strip()
     if not query:
@@ -60,10 +62,19 @@ def search(finder, query: str) -> list[tuple]:
             found = [(sid, name, email, course)
                      for sid, (name, email, course) in finder.get_student_info_items()
                      if (email or "").lower() == lowered]
-        return found
+        return [(1, 1, found)] if found else []
     if query.isdigit():
-        return list(finder.get_student_by_student_id(query))
-    return list(finder.get_student_by_name(query))
+        found = list(finder.get_student_by_student_id(query))
+        return [(1, 1, found)] if found else []
+    groups: dict[tuple[int, int], list[tuple]] = {}
+    for hits, words, student in finder.rank_students_by_name(query):
+        groups.setdefault((hits, words), []).append(student)
+    return [(hits, words, rows) for (hits, words), rows in groups.items()]
+
+
+def search(finder, query: str) -> list[tuple]:
+    """Every match of ``search_groups``, best first, as one list."""
+    return [row for _hits, _words, rows in search_groups(finder, query) for row in rows]
 
 
 def _rows(items) -> list[dict]:
@@ -111,17 +122,25 @@ def main():
     courses = sorted({course for *_, course in roster if course})
 
     query = st.text_input("Search", key="find_student_query",
-                          placeholder="Email, student ID, or first and last name",
-                          help="An exact email, an exact student ID, or a name with at least "
-                               "two matching words (for example first and last name).")
+                          placeholder="Email, student ID, or any part of a name",
+                          help="An exact email, an exact student ID, or part of a name: a first, "
+                               "middle or last name, or an initial, in any order. With several "
+                               "words, students matching all of them come first; students "
+                               "matching only some are listed separately below.")
     if query:
-        matches = _rows(search(finder, query))
-        if matches:
-            st.subheader(f"{len(matches)} match{'es' if len(matches) != 1 else ''}", anchor=False)
-            st.dataframe(matches, hide_index=True)
+        groups = search_groups(finder, query)
+        if groups:
+            hits, words, rows = groups[0]
+            st.subheader(f"{len(rows)} match{'es' if len(rows) != 1 else ''}", anchor=False)
+            if hits < words:
+                st.caption(f"No student matches all {words} words. Closest: {hits} of {words}.")
+            st.dataframe(_rows(rows), hide_index=True)
+            for hits, words, rows in groups[1:]:
+                with st.expander(f"{len(rows)} matching {hits} of {words} words"):
+                    st.dataframe(_rows(rows), hide_index=True)
         else:
-            st.info("No student found. Names need at least two words that match "
-                    "(for example first and last name).", icon=":material/search_off:")
+            st.info("No student found. Try fewer or shorter words, such as a last name or "
+                    "the start of a first name.", icon=":material/search_off:")
 
     st.subheader(f"Roster ({len(roster)} students)", anchor=False)
     picked = st.pills("Courses", courses, selection_mode="multi", key="find_student_courses") \
