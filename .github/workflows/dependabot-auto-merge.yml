@@ -33,6 +33,30 @@ jobs:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
+      # master requires a merge queue, so "auto-merge" means "add to the queue once checks
+      # pass", and the queue entry belongs to whoever armed auto-merge. Armed with
+      # GITHUB_TOKEN (github-actions[bot]) the PR is never queued: GitHub starts no workflow
+      # for an event that token causes, so it does not act on that entry (PRs #540 and #562
+      # sat green for a day or more until queued by hand). Arm it as the cpcc-model-bot App.
+      # Dependabot runs read only Dependabot secrets, so MODEL_BOT_PRIVATE_KEY must also be
+      # set as a Dependabot secret (docs/ci-branch-protection.md). No fallback to
+      # GITHUB_TOKEN: a missing key fails this job instead of arming a PR that never merges.
+      - name: Mint cpcc-model-bot token
+        id: app
+        if: |
+          !(steps.metadata.outputs.package-ecosystem == 'docker' &&
+            steps.metadata.outputs.directory == '/docker/exec-runner') &&
+          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+           steps.metadata.outputs.update-type == 'version-update:semver-minor')
+        uses: actions/create-github-app-token@v3
+        with:
+          # Public Client ID of cpcc-model-bot (App ID 5223949). vars.MODEL_BOT_APP_ID lives on
+          # the model-eval environment (master only), which a Dependabot PR run cannot use.
+          client-id: Iv23liY6sJjVTBVyYWx8
+          private-key: ${{ secrets.MODEL_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
       - name: Enable auto-merge for patch and minor updates
         # Auto-merge patch and minor updates, but not major updates
         # --auto merges only once every REQUIRED status check on master passes.
@@ -43,15 +67,11 @@ jobs:
         # is behind master, because Dependabot rebases only on conflict.
         # Never for the sandbox image (docker/exec-runner): a new base image there is reviewed
         # by hand and needs a version bump (docs/execution-gate.md).
-        if: |
-          !(steps.metadata.outputs.package-ecosystem == 'docker' &&
-            steps.metadata.outputs.directory == '/docker/exec-runner') &&
-          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
-           steps.metadata.outputs.update-type == 'version-update:semver-minor')
+        if: steps.app.outcome == 'success'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ steps.app.outputs.token }}
       
       - name: Hold sandbox image updates for review
         if: |

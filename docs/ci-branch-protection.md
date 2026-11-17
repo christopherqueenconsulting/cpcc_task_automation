@@ -135,6 +135,45 @@ gh api repos/:owner/:repo/branches/master/protection \
 
 Replace `:owner` and `:repo` with your repository owner and name.
 
+## Dependabot auto-merge and the merge queue
+
+`master` requires a merge queue. For a branch with a merge queue, auto-merge means "add the PR to
+the queue once its checks pass", and the queue entry belongs to whoever turned auto-merge on.
+
+`.github/workflows/dependabot-auto-merge.yml` turns it on for patch and minor bumps as the
+`cpcc-model-bot` GitHub App (App ID 5223949, Client ID `Iv23liY6sJjVTBVyYWx8`), never with `GITHUB_TOKEN`. When `GITHUB_TOKEN`
+turned it on, as `github-actions[bot]`, the PR was never queued: GitHub starts no workflow for an
+event that token causes. PRs #540 and #562 sat green for a day or more until someone queued them
+by hand.
+
+**One-time setup.** Runs started by Dependabot read only Dependabot secrets, not Actions or
+environment secrets. Set the App's private key as a Dependabot secret with the same name the
+model workflows use:
+
+```bash
+gh secret set MODEL_BOT_PRIVATE_KEY --app dependabot < cpcc-model-bot.private-key.pem
+```
+
+Without it the `dependabot` job fails at "Mint cpcc-model-bot token" and the PR is not armed.
+That failure is the signal; there is no fallback to `GITHUB_TOKEN`.
+
+**Check that it works.** On a patch or minor Dependabot PR, the timeline shows
+`auto_merge_enabled` and then `added_to_merge_queue` by `cpcc-model-bot[bot]`, and the merge
+group runs the required checks (`merge_group` runs on `gh-readonly-queue/master/pr-<n>-...`):
+
+```bash
+gh api "repos/:owner/:repo/issues/<n>/timeline?per_page=100" \
+  --jq '.[]|select(.event|test("auto_merge|queue|merged"))|"\(.created_at) \(.event) \(.actor.login)"'
+```
+
+Keep "Require branches to be up to date" off (`strict: false`); the queue already tests each PR
+against current `master`. The API example above sets `strict=true` and one required approval;
+either one stops bot PRs from merging on their own.
+
+**Undo.** Revert the workflow change and delete the Dependabot secret
+(`gh secret delete MODEL_BOT_PRIVATE_KEY --app dependabot`). Patch and minor PRs then wait for
+someone to add them to the queue by hand, as before.
+
 ## Running Tests Locally
 
 ### Interactive Mode
