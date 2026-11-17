@@ -13,8 +13,17 @@ when the product's locators no longer match) and, at every step, records:
 
 It then prints a verdict: INFRA, CREDENTIALS, MFA, DOM_CHANGED, or LOGIN_OK. The
 verdict is a hint, read the step table too. The password is never printed, logged or
-written: values typed into fields are not recorded and the report is scrubbed of the
-user id and password. Reports go to ``output/login_probe/`` (gitignored).
+written: values typed into fields are not recorded and the JSON report is scrubbed of the
+user id and password. Reports go to ``output/login_probe/`` (gitignored, mode 0700).
+
+Screenshots are NOT scrubbed. A Microsoft sign-in screenshot can show the account email,
+tile and MFA number, so never share or attach that folder. Once the browser is on an
+authenticated BrightSpace page the probe records host and path only: no screenshot, title
+or page inventory, because those pages can hold student names and grades.
+
+``--fresh`` and ``--product`` delete the Microsoft and BrightSpace cookies in the app's
+persistent browser profile, which signs the app out. Undo: sign in once more and approve
+the MFA number (the probe's own login does this and clicks "Yes" on "Stay signed in?").
 
 Credentials, first found wins: ``INSTRUCTOR_USERID`` / ``INSTRUCTOR_PASS`` in the
 environment or ``.env``; ``--user`` / ``--password-file``; otherwise a prompt on a TTY.
@@ -123,7 +132,7 @@ class Probe:
         self.driver = driver
         self.steps: list[dict] = []
         self.secrets = [s for s in secrets if s]
-        os.makedirs(OUT_DIR, exist_ok=True)
+        os.makedirs(OUT_DIR, mode=0o700, exist_ok=True)
         self.stamp = f"{_dt.datetime.now():%Y%m%d-%H%M%S}"
 
     def scrub(self, obj):
@@ -146,6 +155,11 @@ class Probe:
             u = urlparse(d.current_url or "")
             step["host"] = u.hostname or ""
             step["where"] = f"{u.hostname}{u.path}"
+            if _on_brightspace(d.current_url or "") and "login" not in u.path.lower():
+                # Authenticated BrightSpace page: it can hold student names and grades.
+                step["note"] = "authenticated BrightSpace page: host and path only"
+                self.steps.append(step)
+                return step
             step["title"] = d.title
             step["ready"] = d.execute_script("return document.readyState")
         except Exception as e:  # noqa: BLE001
@@ -392,8 +406,10 @@ def main() -> int:
     ap.add_argument("--url", default=DEFAULT_URL, help="BrightSpace page to open (default: home)")
     ap.add_argument("--user", help="Instructor user id (default INSTRUCTOR_USERID, else prompt)")
     ap.add_argument("--password-file", help="File whose first line is the password (default INSTRUCTOR_PASS, else prompt)")
-    ap.add_argument("--fresh", action="store_true", help="Delete cookies on the login hosts first, to force a login")
-    ap.add_argument("--product", action="store_true", help="Afterwards run the product's own login_if_needed on a fresh login")
+    ap.add_argument("--fresh", action="store_true", help="Delete the Microsoft and BrightSpace cookies in the app's browser profile first, to force a login "
+                         "(signs the app out; the next app run needs one MFA approval)")
+    ap.add_argument("--product", action="store_true", help="Afterwards run the product's own login_if_needed on a fresh login. Always deletes the Microsoft and "
+                         "BrightSpace cookies first (signs the app out; the next app run needs one MFA approval)")
     ap.add_argument("--max-seconds", type=int, default=180)
     args = ap.parse_args()
 
@@ -433,6 +449,9 @@ def main() -> int:
     probe = Probe(driver, [user, password])
     product = None
     try:
+        if args.fresh or args.product:
+            print("Note: clearing Microsoft and BrightSpace cookies in the app's browser profile; "
+                  "the next app run needs one MFA approval.", flush=True)
         if args.fresh:
             for u in ("https://login.microsoftonline.com", "https://brightspace.cpcc.edu"):
                 try:

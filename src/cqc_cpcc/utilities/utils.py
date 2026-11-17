@@ -1115,6 +1115,10 @@ def microsoft_login(driver: WebDriver, mfa_handler=None):
             driver, number_match_xpath, mfa_handler,
             context="microsoft", message=mfa_message,
         )
+        if driver.find_elements(By.XPATH, number_match_xpath):
+            # _wait_for_mfa_approval returns quietly on timeout; do not report the login as
+            # done (and tell the web UI the prompt is resolved) while the number is on screen.
+            raise TimeoutException(f"MFA was not approved within {MFA_APPROVAL_TIMEOUT_SECONDS} s")
 
     # Accept "Stay signed in?" (KMSI) if it appears so the login persists across runs.
     # Some tenants skip it — after MFA approval we may already be redirected to the app.

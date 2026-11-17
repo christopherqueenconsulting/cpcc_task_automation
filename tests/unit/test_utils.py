@@ -1321,6 +1321,7 @@ class TestMicrosoftLoginBranchBehavior:
         mocker.patch("cqc_cpcc.utilities.utils.click_element_wait_retry", side_effect=[Mock(), Mock()])
         mocker.patch("cqc_cpcc.utilities.utils._mfa_settle_before_capture")  # no real sleep
         mocker.patch("cqc_cpcc.utilities.utils._wait_for_mfa_approval")  # no real polling
+        driver.find_elements.return_value = []  # prompt cleared after approval
         captured = mocker.patch(
             "cqc_cpcc.utilities.selenium_util.capture_mfa_challenge",
             return_value=Mock(number="42", message=""),
@@ -1423,6 +1424,34 @@ class TestMicrosoftLoginBranchBehavior:
         approval.assert_called_once()
         handler.on_challenge.assert_called_once()
         handler.on_resolved.assert_called_once()
+
+    def test_microsoft_login_raises_when_mfa_is_not_approved(self, mocker):
+        """The approval wait returns quietly on timeout; the login must then fail, not report success."""
+        driver = Mock()
+        driver.current_window_handle = "window-main"
+        wait_main, wait_short, wait_long, wait_probe, wait_mfa = Mock(), Mock(), Mock(), Mock(), Mock()
+        wait_short.until.side_effect = [True, "mfa"]
+        wait_mfa.until.return_value = True
+        mocker.patch("cqc_cpcc.utilities.utils.get_driver_wait", side_effect=[wait_main, wait_short, wait_probe, wait_long, wait_mfa])
+        mocker.patch("cqc_cpcc.utilities.utils._submit_microsoft_credentials")
+        mocker.patch("cqc_cpcc.utilities.utils._mfa_settle_before_capture")
+        mocker.patch("cqc_cpcc.utilities.utils._wait_for_mfa_approval")  # returns, number still shown
+        mocker.patch(
+            "cqc_cpcc.utilities.selenium_util.capture_mfa_challenge",
+            return_value=Mock(number="42", message=""),
+        )
+        driver.find_elements.return_value = [object()]  # the number is still on screen
+        mocker.patch.dict(
+            os.environ,
+            {"INSTRUCTOR_USERID": "example", "INSTRUCTOR_PASS": os.urandom(8).hex()},  # never a real credential
+            clear=False,
+        )
+
+        handler = Mock()
+        with pytest.raises(TimeoutException, match="MFA was not approved"):
+            microsoft_login(driver, mfa_handler=handler)
+
+        handler.on_resolved.assert_not_called()
 
     def test_microsoft_form_or_mfa_detects_each_page(self):
         from cqc_cpcc.utilities.utils import _microsoft_form_or_mfa
