@@ -10,6 +10,12 @@ permissions:
   contents: write
   pull-requests: write
 
+# One run per PR: a Dependabot rebase supersedes the earlier run. Arming auto-merge is
+# idempotent, so a cancelled run loses nothing (and `dependabot` is not a required check).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
 jobs:
   dependabot:
     runs-on: ubuntu-latest
@@ -20,7 +26,8 @@ jobs:
     steps:
       - name: Fetch Dependabot metadata
         id: metadata
-        uses: dependabot/fetch-metadata@v3
+        # Pinned to a commit: this job now holds a write-scoped App token.
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
         with:
           github-token: "${{ secrets.GITHUB_TOKEN }}"
       
@@ -50,9 +57,9 @@ jobs:
            steps.metadata.outputs.update-type == 'version-update:semver-minor')
         uses: actions/create-github-app-token@v3
         with:
-          # Public Client ID of cpcc-model-bot (App ID 5223949). vars.MODEL_BOT_APP_ID lives on
-          # the model-eval environment (master only), which a Dependabot PR run cannot use.
-          client-id: Iv23liY6sJjVTBVyYWx8
+          # Public App ID of cpcc-model-bot, as in model-eval.yml. vars.MODEL_BOT_APP_ID lives
+          # on the model-eval environment (master only), which a Dependabot PR run cannot use.
+          app-id: 5223949
           private-key: ${{ secrets.MODEL_BOT_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write

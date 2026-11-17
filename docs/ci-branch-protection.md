@@ -141,7 +141,7 @@ Replace `:owner` and `:repo` with your repository owner and name.
 the queue once its checks pass", and the queue entry belongs to whoever turned auto-merge on.
 
 `.github/workflows/dependabot-auto-merge.yml` turns it on for patch and minor bumps as the
-`cpcc-model-bot` GitHub App (App ID 5223949, Client ID `Iv23liY6sJjVTBVyYWx8`), never with `GITHUB_TOKEN`. When `GITHUB_TOKEN`
+`cpcc-model-bot` GitHub App (App ID 5223949), never with `GITHUB_TOKEN`. When `GITHUB_TOKEN`
 turned it on, as `github-actions[bot]`, the PR was never queued: GitHub starts no workflow for an
 event that token causes. PRs #540 and #562 sat green for a day or more until someone queued them
 by hand.
