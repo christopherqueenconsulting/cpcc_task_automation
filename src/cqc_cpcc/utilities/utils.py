@@ -982,31 +982,30 @@ def _resolve_microsoft_account_path(
     return False
 
 
-def microsoft_login(driver: WebDriver, mfa_handler=None):
-    # Enter in user info and password
-    instructor_user_id = os.environ["INSTRUCTOR_USERID"]
-    instructor_email = os.getenv("INSTRUCTOR_EMAIL", f"{instructor_user_id}@cpcc.edu")
-    instructor_password = os.environ["INSTRUCTOR_PASS"]
+_MS_STEP_FORM = "form"
+_MS_STEP_MFA = "mfa"
+_MS_NUMBER_MATCH_XPATH = "//*[@id='idRichContext_DisplaySign']"
 
-    wait = get_driver_wait(driver, 15)
-    wait_short = get_driver_wait(driver, 5)
-    wait_probe = get_driver_wait(driver, 1)
-    wait_long = get_driver_wait(driver, 30)
 
-    original_window = driver.current_window_handle
+def _microsoft_form_or_mfa(driver: WebDriver):
+    """``"form"`` when the sign-in form is up, ``"mfa"`` when only the MFA challenge is, else False."""
+    if driver.find_elements(By.XPATH, "//div[@id='loginHeader']"):
+        return _MS_STEP_FORM
+    if driver.find_elements(By.XPATH, _MS_NUMBER_MATCH_XPATH):
+        return _MS_STEP_MFA
+    return False
 
-    logger.info("Microsoft login page detected — checking for existing account selection or username entry.")
 
-    # Wait for the title to change
-    wait_short.until(EC.title_is("Sign in to your account"))
-
-    logger.info("Microsoft login page loaded — proceeding with authentication.")
-
-    wait_short.until(
-        EC.presence_of_element_located((By.XPATH, "//div[@id='loginHeader']")),
-        "Waiting for login screen presence",
-    )
-
+def _submit_microsoft_credentials(
+        driver: WebDriver,
+        wait: WebDriverWait,
+        wait_short: WebDriverWait,
+        wait_probe: WebDriverWait,
+        instructor_user_id: str,
+        instructor_email: str,
+        instructor_password: str,
+) -> None:
+    """Pick/enter the account, then the password, and click Sign in."""
     logger.info("Checking for existing account selection or username entry.")
 
     # Username may already be prefilled; if a different user is shown, clear it.
@@ -1053,11 +1052,49 @@ def microsoft_login(driver: WebDriver, mfa_handler=None):
     click_element_wait_retry(driver, wait, "//input[contains(@class, 'button_primary') and contains(@value,'Sign in')]",
                              "Waiting for Sign in Button", By.XPATH)
 
+
+def microsoft_login(driver: WebDriver, mfa_handler=None):
+    # Enter in user info and password
+    instructor_user_id = os.environ["INSTRUCTOR_USERID"]
+    instructor_email = os.getenv("INSTRUCTOR_EMAIL", f"{instructor_user_id}@cpcc.edu")
+    instructor_password = os.environ["INSTRUCTOR_PASS"]
+
+    wait = get_driver_wait(driver, 15)
+    wait_short = get_driver_wait(driver, 5)
+    wait_probe = get_driver_wait(driver, 1)
+    wait_long = get_driver_wait(driver, 30)
+
+    original_window = driver.current_window_handle
+
+    logger.info("Microsoft login page detected — checking for existing account selection or username entry.")
+
+    # Wait for the title to change
+    wait_short.until(EC.title_is("Sign in to your account"))
+
+    logger.info("Microsoft login page loaded — proceeding with authentication.")
+
+    # The sign-in form (loginHeader) is NOT shown when Microsoft goes straight to the
+    # MFA challenge (remembered account / cached password), so accept either one.
+    # Waiting only for the form timed out after 5 s before the instructor could approve.
+    page_step = wait_short.until(
+        _microsoft_form_or_mfa,
+        "Waiting for login screen presence",
+    )
+    already_at_mfa = page_step == _MS_STEP_MFA
+
+    if already_at_mfa:
+        logger.info("Microsoft went straight to the MFA challenge — skipping username/password entry.")
+    else:
+        _submit_microsoft_credentials(
+            driver, wait, wait_short, wait_probe,
+            instructor_user_id, instructor_email, instructor_password,
+        )
+
     # A Microsoft Authenticator "number matching" challenge may appear here. When
     # running headless (web app) the instructor can't see the browser, so surface
     # the matching number + screenshot via the MFA handler so they can approve it
     # on their phone. Detection is best-effort; absence is fine (push/no-MFA).
-    number_match_xpath = "//*[@id='idRichContext_DisplaySign']"
+    number_match_xpath = _MS_NUMBER_MATCH_XPATH
     # The number-matching screen can take a few seconds to render after Sign in,
     # so use a longer wait than the 1s account-picker probe. presence_of_element
     # returns as soon as it appears, so the full timeout is only spent when MFA is
