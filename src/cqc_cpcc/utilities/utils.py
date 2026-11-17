@@ -759,7 +759,8 @@ def _wait_for_mfa_approval(
     (even if it wasn't readable on the first capture). Honors
     ``mfa_handler.cancelled`` so the web app's Cancel button can abort. Returns
     quietly on timeout (the caller then attempts the next step, which will
-    surface a clearer error if needed).
+    surface a clearer error if needed). ``microsoft_login`` re-checks the prompt after
+    this returns and raises when it is still on screen, so keep that check.
     """
     deadline = time.time() + timeout
     last_number = None

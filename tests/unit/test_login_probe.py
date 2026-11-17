@@ -38,7 +38,7 @@ def test_snapshot_skips_capture_on_authenticated_brightspace_page(probe_module):
     driver.execute_script.assert_not_called()
     assert "title" not in step
     assert "inventory" not in step
-    assert step["where"].startswith("brightspace.cpcc.edu/")
+    assert step["host"] == "brightspace.cpcc.edu"
     assert probe_module._classify(step) == "brightspace"
 
 
