@@ -1385,6 +1385,58 @@ class TestMicrosoftLoginBranchBehavior:
         driver.switch_to.window.assert_called_once_with("window-main")
         assert click_retry.call_count == 1  # only the Sign-in click
 
+    def test_microsoft_login_waits_for_mfa_when_form_is_skipped(self, mocker):
+        """Microsoft can open on the MFA challenge (no loginHeader): wait for approval, do not time out."""
+        driver = Mock()
+        driver.current_window_handle = "window-main"
+
+        wait_main = Mock()
+        wait_short = Mock()
+        wait_long = Mock()
+        wait_main.until.return_value = True
+        # title check, then the form-or-MFA wait reports "mfa"
+        wait_short.until.side_effect = [True, "mfa"]
+        wait_long.until.return_value = True
+        wait_probe = Mock()
+        wait_mfa = Mock()
+        wait_mfa.until.return_value = True
+        mocker.patch("cqc_cpcc.utilities.utils.get_driver_wait", side_effect=[wait_main, wait_short, wait_probe, wait_long, wait_mfa])
+        submit = mocker.patch("cqc_cpcc.utilities.utils._submit_microsoft_credentials")
+        mocker.patch("cqc_cpcc.utilities.utils._mfa_settle_before_capture")
+        approval = mocker.patch("cqc_cpcc.utilities.utils._wait_for_mfa_approval")
+        mocker.patch(
+            "cqc_cpcc.utilities.selenium_util.capture_mfa_challenge",
+            return_value=Mock(number="42", message=""),
+        )
+        mocker.patch("cqc_cpcc.utilities.utils.KMSI_PROMPT_TIMEOUT_SECONDS", 0)
+        driver.find_elements.return_value = []
+        mocker.patch.dict(
+            os.environ,
+            {"INSTRUCTOR_USERID": "example", "INSTRUCTOR_PASS": os.urandom(8).hex()},  # never a real credential
+            clear=False,
+        )
+
+        handler = Mock()
+        microsoft_login(driver, mfa_handler=handler)
+
+        submit.assert_not_called()  # no username/password entry on the MFA page
+        approval.assert_called_once()
+        handler.on_challenge.assert_called_once()
+        handler.on_resolved.assert_called_once()
+
+    def test_microsoft_form_or_mfa_detects_each_page(self):
+        from cqc_cpcc.utilities.utils import _microsoft_form_or_mfa
+
+        driver = Mock()
+        driver.find_elements.side_effect = lambda by, xpath: [object()] if "loginHeader" in xpath else []
+        assert _microsoft_form_or_mfa(driver) == "form"
+
+        driver.find_elements.side_effect = lambda by, xpath: [object()] if "idRichContext" in xpath else []
+        assert _microsoft_form_or_mfa(driver) == "mfa"
+
+        driver.find_elements.side_effect = lambda by, xpath: []
+        assert _microsoft_form_or_mfa(driver) is False
+
 
 @pytest.mark.unit
 class TestReadablePathConfinement:
