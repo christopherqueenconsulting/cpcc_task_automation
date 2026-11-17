@@ -42,23 +42,29 @@ jobs:
       
       # master requires a merge queue, so "auto-merge" means "add to the queue once checks
       # pass", and the queue entry belongs to whoever armed auto-merge. Armed with
-      # GITHUB_TOKEN (github-actions[bot]) the PR is never queued: GitHub starts no workflow
-      # for an event that token causes, so it does not act on that entry (PRs #540 and #562
-      # sat green for a day or more until queued by hand). Arm it as the cpcc-model-bot App.
+      # GITHUB_TOKEN (github-actions[bot]) the PR was never queued (PRs #540 and #562 sat
+      # green for a day or more until queued by hand), while PRs armed by a person queued
+      # themselves. Likely reason: GitHub starts no workflow for an event that token causes.
+      # Arm it as the cpcc-model-bot App.
       # Dependabot runs read only Dependabot secrets, so MODEL_BOT_PRIVATE_KEY must also be
       # set as a Dependabot secret (docs/ci-branch-protection.md). No fallback to
       # GITHUB_TOKEN: a missing key fails this job instead of arming a PR that never merges.
+      # Not for GitHub Actions bumps: a new action release runs in workflows that hold
+      # secrets, so a person reads it first (see "Hold action updates" below).
       - name: Mint cpcc-model-bot token
         id: app
         if: |
           !(steps.metadata.outputs.package-ecosystem == 'docker' &&
             steps.metadata.outputs.directory == '/docker/exec-runner') &&
+          steps.metadata.outputs.package-ecosystem != 'github-actions' &&
           (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
            steps.metadata.outputs.update-type == 'version-update:semver-minor')
-        uses: actions/create-github-app-token@v3
+        # Pinned to a commit: this step receives the App private key.
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
-          # Public App ID of cpcc-model-bot, as in model-eval.yml. vars.MODEL_BOT_APP_ID lives
-          # on the model-eval environment (master only), which a Dependabot PR run cannot use.
+          # cpcc-model-bot's public App ID, written out because the other workflows read
+          # vars.MODEL_BOT_APP_ID from the model-eval environment (master only), which a
+          # Dependabot PR run cannot use. Confirm: gh api /apps/cpcc-model-bot --jq .id
           app-id: 5223949
           private-key: ${{ secrets.MODEL_BOT_PRIVATE_KEY }}
           permission-contents: write
@@ -86,6 +92,17 @@ jobs:
           steps.metadata.outputs.directory == '/docker/exec-runner'
         run: |
           gh pr comment "$PR_URL" --body "This changes the student-code sandbox image. Not auto-merged: review it, bump RUNNER_VERSION and RUNNER_SOURCE_SHA256 (see docs/execution-gate.md), rebuild, and run the Docker integration tests."
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Hold action updates for review
+        if: |
+          steps.metadata.outputs.package-ecosystem == 'github-actions' &&
+          (steps.metadata.outputs.update-type == 'version-update:semver-patch' ||
+           steps.metadata.outputs.update-type == 'version-update:semver-minor')
+        run: |
+          gh pr comment "$PR_URL" --body "This updates GitHub Actions used by workflows that hold secrets. Not auto-merged: read the action's release notes and diff, then add the PR to the merge queue."
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
