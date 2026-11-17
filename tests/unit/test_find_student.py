@@ -246,6 +246,8 @@ class TestDynamicNameSearch:
         "8": ("\u0418\u0432\u0430\u043d\u043e\u0432, \u041f\u0451\u0442\u0440", "h@example.edu", "CTS108"),
         "9": ("\u00d8rsted, \u0141ukasz", "i@example.edu", "CTS109"),
         "10": ("\u738b, \u5c0f\u660e", "j@example.edu", "CTS110"),
+        "11": ("\u03a0\u03b1\u03c0\u03b1\u03b4\u03cc\u03c0\u03bf\u03c5\u03bb\u03bf\u03c2, \u0395\u03bb\u03ad\u03bd\u03b7", "k@example.edu", "CTS111"),
+        "12": ("Mu\u0308ller, Jo\u0308rg", "l@example.edu", "CTS112"),  # accents as loose combining marks
     }
 
     def _finder(self):
@@ -259,8 +261,8 @@ class TestDynamicNameSearch:
         ("DOE", ["2", "1"]),                 # last name alone, any case; sorted by name
         ("michael", ["1"]),                  # middle name alone
         ("a", ["2"]),                        # an initial matches the start of a name part
-        ("m", ["1", "4"]),                   # Michael, Maria
-        ("jo", ["1", "6"]),                  # the start of a name
+        ("m", ["1", "4", "12"]),             # Michael, Maria, Muller
+        ("jo", ["1", "12", "6"]),             # the start of a name: John, Jorg, Joan
         ("garcia", ["4"]),                   # one half of a hyphenated name
         ("obrien", ["5"]),                   # apostrophe ignored
         ("pena", ["7"]),                     # accents ignored
@@ -270,6 +272,9 @@ class TestDynamicNameSearch:
         ("\u00f8rsted", ["9"]),                 # o-slash has no ASCII fold; kept as is
         ("\u0142ukasz", ["9"]),                 # l-stroke
         ("\u738b", ["10"]),                      # CJK
+        ("\u03c0\u03b1\u03c0\u03b1\u03b4\u03cc\u03c0\u03bf\u03c5\u03bb\u03bf\u03c2", ["11"]),  # Greek, final sigma and tonos
+        ("muller", ["12"]),                   # decomposed u + diaeresis folds like the composed letter
+        ("j\u00f6rg", ["12"]),                # composed query finds the decomposed roster name
         ("zzz", []),
         ("", []),
         ("  ,  ", []),

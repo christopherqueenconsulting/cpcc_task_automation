@@ -38,7 +38,8 @@ def name_tokens(text: str) -> list[str]:
     Letters of any script are kept (Cyrillic, Greek, CJK, o-slash, l-stroke), so those names are
     found by themselves; only Latin accents are folded away.
     """
-    folded = "".join(_fold_char(ch) for ch in (text or "")).casefold()
+    composed = unicodedata.normalize("NFC", text or "")  # base letter + loose accent -> one character
+    folded = "".join(_fold_char(ch) for ch in composed).casefold()
     folded = re.sub(r"['\u2019.]", "", folded)  # O'Brien -> obrien, "M." -> m
     tokens: list[str] = []
     current: list[str] = []
