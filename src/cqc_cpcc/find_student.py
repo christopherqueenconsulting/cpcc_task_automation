@@ -1,6 +1,8 @@
 #  Copyright (c) 2024. Christopher Queen Consulting LLC (http://www.ChristopherQueenConsulting.com/)
+import difflib
 import re
 import threading
+import unicodedata
 
 from cqc_cpcc.my_colleges import MyColleges
 from cqc_cpcc.utilities.logger import logger
@@ -11,6 +13,77 @@ PHASE_SUCCEEDED = "succeeded"
 PHASE_FAILED = "failed"
 PHASE_CANCELLED = "cancelled"
 FINISHED_PHASES = (PHASE_SUCCEEDED, PHASE_FAILED, PHASE_CANCELLED)
+
+
+# --- Name matching -----------------------------------------------------------------
+# A search word matches a name part when it is the whole part, the start of it (so "J" or
+# "Jo" find John, and a middle initial finds a middle name), or, for words of 4+ letters,
+# close to it (one letter off: "Smyth" finds Smith). Better matches rank higher.
+_SCORE_EXACT = 3.0
+_SCORE_PREFIX = 2.0
+_SCORE_FUZZY = 1.0
+_FUZZY_MIN_LEN = 4
+_FUZZY_RATIO = 0.8
+
+
+def _fold_char(ch: str) -> str:
+    """Drop the accent of a Latin letter (e -> e); keep every other character as it is."""
+    base = "".join(c for c in unicodedata.normalize("NFKD", ch) if not unicodedata.combining(c))
+    return base if base and base.isascii() else ch
+
+
+def name_tokens(text: str) -> list[str]:
+    """Lower-case, accent-free parts of a name or query: "Doe, Jo-Ann M." -> doe, jo, ann, m.
+
+    Letters of any script are kept (Cyrillic, Greek, CJK, o-slash, l-stroke), so those names are
+    found by themselves; only Latin accents are folded away.
+    """
+    composed = unicodedata.normalize("NFC", text or "")  # base letter + loose accent -> one character
+    folded = "".join(_fold_char(ch) for ch in composed).casefold()
+    folded = re.sub(r"['\u2019.]", "", folded)  # O'Brien -> obrien, "M." -> m
+    tokens: list[str] = []
+    current: list[str] = []
+    for ch in folded:
+        if unicodedata.category(ch)[0] in "LNM":  # letters, numbers and their combining marks
+            current.append(ch)
+        elif current:
+            tokens.append("".join(current))
+            current = []
+    if current:
+        tokens.append("".join(current))
+    return tokens
+
+
+def _word_score(word: str, token: str) -> float:
+    if word == token:
+        return _SCORE_EXACT
+    if token.startswith(word):
+        return _SCORE_PREFIX
+    if len(word) >= _FUZZY_MIN_LEN and len(token) >= _FUZZY_MIN_LEN - 1 \
+            and difflib.SequenceMatcher(None, word, token).ratio() >= _FUZZY_RATIO:
+        return _SCORE_FUZZY
+    return 0.0
+
+
+def match_name_words(words: list[str], tokens: list[str]) -> tuple[int, float]:
+    """How many search words find a part of the name, and how well (hits, quality).
+
+    Each name part counts for one word only, so "john john" does not count one John twice.
+    """
+    pairs = sorted(
+        ((_word_score(w, t), wi, ti) for wi, w in enumerate(words) for ti, t in enumerate(tokens)),
+        key=lambda p: -p[0])
+    used_words: set[int] = set()
+    used_tokens: set[int] = set()
+    hits, quality = 0, 0.0
+    for score, wi, ti in pairs:
+        if score <= 0 or wi in used_words or ti in used_tokens:
+            continue
+        used_words.add(wi)
+        used_tokens.add(ti)
+        hits += 1
+        quality += score
+    return hits, quality
 
 
 class FindStudents:
@@ -55,20 +128,28 @@ class FindStudents:
 
         return found_students
 
-    def get_student_by_name(self, searchfor_student_name: str):
-        found_students = []
+    def rank_students_by_name(self, searchfor_student_name: str) -> list[tuple[int, int, tuple]]:
+        """Students whose name has at least one of the searched words, best first.
 
-        #  Search through the student_info list for the student with the matching student_id
+        Returns ``(hits, words, student)`` where ``student`` is ``(id, name, email, course)``,
+        ``hits`` is how many of the ``words`` searched were found in the name. Sorted by hits,
+        then match quality, then name.
+        """
+        words = list(dict.fromkeys(name_tokens(searchfor_student_name)))
+        if not words:
+            return []
+        ranked = []
         for student_id, (student_name, student_email, course_name) in self.get_student_info_items():
-            # Split the student name by comma and spaces into a list
-            student_name_list = re.split(r'[,\s]+', student_name)
+            hits, quality = match_name_words(words, name_tokens(student_name))
+            if hits:
+                ranked.append((hits, quality, student_name or "",
+                               (student_id, student_name, student_email, course_name)))
+        ranked.sort(key=lambda r: (-r[0], -r[1], r[2].casefold()))
+        return [(hits, len(words), student) for hits, _quality, _name, student in ranked]
 
-            # If at least 2 of the entries from the student_name_list are in the searchfor_student_
-            if sum([name in searchfor_student_name for name in student_name_list]) >= 2:
-                # append the student info back to found students list
-                found_students.append((student_id, student_name, student_email, course_name))
-
-        return found_students
+    def get_student_by_name(self, searchfor_student_name: str):
+        """Students matching any searched word (first, middle, last name or initial), best first."""
+        return [student for _hits, _words, student in self.rank_students_by_name(searchfor_student_name)]
 
     def terminate(self):
         self._running = False

@@ -96,13 +96,63 @@ class TestDesignPieceU6:
         ("STUDENT.EXAMPLE@EMAIL.cpcc.edu", ["1234567"]),  # case-insensitive email fallback
         ("7654321", ["7654321"]),
         ("Bo Baker", ["7654321"]),
-        ("Baker", []),  # names need two matching words
+        ("Baker", ["7654321"]),  # a single name word is enough
+        ("bo", ["7654321"]),
+        ("ann baker", ["1234567", "7654321"]),  # one word each: both listed
+        ("nobody", []),
     ])
     def test_one_search_box(self, query, expected):
         from cqc_cpcc.find_student import FindStudents
         from cqc_streamlit_app.app_pages import find_student as page
         finder = FindStudents(student_info=dict(self.ROSTER))
         assert [row[0] for row in page.search(finder, query)] == expected
+
+    def test_name_search_groups_by_how_many_words_match(self):
+        from cqc_cpcc.find_student import FindStudents
+        from cqc_streamlit_app.app_pages import find_student as page
+        roster = dict(self.ROSTER)
+        roster["1111111"] = ("Adams, Bo", "x@example.edu", "CSC-134-N801")
+        finder = FindStudents(student_info=roster)
+        groups = [(hits, words, [r[0] for r in rows]) for hits, words, rows in page.search_groups(finder, "bo adams")]
+        assert groups == [(2, 2, ["1111111"]), (1, 2, ["1234567", "7654321"])]
+
+    def test_page_lists_partial_matches_separately(self):
+        roster = dict(self.ROSTER)
+        roster["1111111"] = ("Adams, Bo", "x@example.edu", "CSC-134-N801")
+        app = _app(FakeJob(PHASE_SUCCEEDED, roster))
+        app.run()
+        app.text_input(key="find_student_query").input("bo adams").run()
+        assert not app.exception, app.exception
+        assert any(h.value == "1 match" for h in app.subheader)
+        assert any("2 matching 1 of 2 words" in e.label for e in app.expander)
+
+    def test_page_says_when_no_student_matches_every_word(self):
+        app = _app(FakeJob(PHASE_SUCCEEDED, dict(self.ROSTER)))
+        app.run()
+        app.text_input(key="find_student_query").input("ann baker").run()
+        assert not app.exception, app.exception
+        assert any("No student matches all 2 words" in c.value for c in app.caption)
+
+    @pytest.mark.parametrize("query,word_advice", [
+        ("nobody@example.edu", False),
+        ("9999999", False),
+        ("zzzz", True),
+    ])
+    def test_empty_result_message_fits_the_kind_of_search(self, query, word_advice):
+        app = self._app()
+        app.run()
+        app.text_input(key="find_student_query").input(query).run()
+        assert not app.exception, app.exception
+        text = " ".join(i.value for i in app.info)
+        assert ("fewer or shorter words" in text) is word_advice
+        if not word_advice:
+            assert "Refresh roster" in text
+
+    def test_partial_only_results_are_headed_as_closest_matches(self):
+        app = _app(FakeJob(PHASE_SUCCEEDED, dict(self.ROSTER)))
+        app.run()
+        app.text_input(key="find_student_query").input("ann baker").run()
+        assert any(h.value == "2 closest matches" for h in app.subheader)
 
     def test_results_persist_and_roster_is_read_only(self):
         app = self._app()
