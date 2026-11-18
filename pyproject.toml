@@ -53,7 +53,7 @@ optional = true
 [tool.poetry.group.dev.dependencies]
 # Streamlit's optional file watcher. Streamlit itself requires it only on non-macOS
 # platforms, so install this group on a Mac for fast hot reload: `poetry install --with dev,test`.
-watchdog = "^6"
+watchdog = ">=6,<8"
 
 
 [tool.poetry.group.test]
