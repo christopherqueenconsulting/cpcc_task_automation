@@ -12,4 +12,4 @@ You built a working pay calculator. Check how you round the total.
 *Minor Issues:*
   - **Missing Decimal Places**: The gross pay is printed without two decimal places.
 
-Strong work. The notes above explain the remaining details that cost points.
+Strong work. The notes above explain the remaining details that were missed.

@@ -10,4 +10,4 @@ The numbers are right. They appear in a different order than the assignment asks
   - **Output Order**: The lines print in a different order from the assignment.
     Output check: with the input `52 18.25`, the expected line was `Regular pay: 730.00` but your program printed `Overtime pay: 333.00`.
 
-Strong work. The notes above explain the remaining details that cost points.
+Strong work. The notes above explain the remaining details that were missed.

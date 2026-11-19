@@ -36,7 +36,7 @@ CLOSING_NO_WORK = (
 )
 CLOSING_BANDS = (
     (90, "Excellent work. Your program meets the requirements cleanly."),
-    (80, "Strong work. The notes above explain the remaining details that cost points."),
+    (80, "Strong work. The notes above explain the remaining details that were missed."),
     (70, "You are on the right track, and much of this works well. The notes above explain what "
          "was missed and why; reviewing them will strengthen your understanding of this material."),
     (60, "There is real progress here to build on. Review each item above alongside the related "
