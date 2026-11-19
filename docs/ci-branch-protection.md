@@ -135,6 +135,87 @@ gh api repos/:owner/:repo/branches/master/protection \
 
 Replace `:owner` and `:repo` with your repository owner and name.
 
+## Dependabot auto-merge and the merge queue
+
+`master` requires a merge queue. For a branch with a merge queue, auto-merge means "add the PR to
+the queue once its checks pass", and the queue entry belongs to whoever turned auto-merge on.
+
+`.github/workflows/dependabot-auto-merge.yml` turns it on for patch and minor bumps as the
+`cpcc-model-bot` GitHub App (App ID 5223949), never with `GITHUB_TOKEN`. When `GITHUB_TOKEN`
+turned it on, as `github-actions[bot]`, the PR was never queued: #540 sat green about 19 hours
+until someone queued it by hand, and #562 more than a day, while PRs a person armed queued
+themselves. The
+likely reason is that GitHub starts no workflow for an event that token causes.
+
+Not armed, by design: major bumps (`dependabot-triage.yml` posts a recommendation), the sandbox
+image (`docker/exec-runner`), and GitHub Actions bumps. Actions bumps get a comment instead,
+because a new action release runs in workflows that hold secrets; read it, then queue it by hand.
+The approval on each PR still comes from `github-actions[bot]`; only the arming is the App.
+
+**One-time setup** (the repo owner, about 5 minutes). Runs started by Dependabot read only
+Dependabot secrets, not Actions or environment secrets, so the App's key must be stored there too.
+Use a new key made for this, so it can be revoked without touching the model workflows' key:
+
+1. Open the App's settings: github.com > the `christopherqueenconsulting` organization >
+   Settings > Developer settings > GitHub Apps > `cpcc-model-bot` > Edit.
+2. Under **Private keys**, click **Generate a private key**. The browser downloads a `.pem` file.
+   Note the new key's SHA256 fingerprint shown in that list, to tell it apart later. Leave the
+   existing key alone: the `model-eval` environment uses it.
+3. Store it and delete the local copy:
+
+   ```bash
+   PEM=~/Downloads/cpcc-model-bot.2026-11-17.private-key.pem   # the exact file just downloaded
+   gh secret set MODEL_BOT_PRIVATE_KEY --app dependabot < "$PEM"
+   trash "$PEM"                      # or: rm -P on macOS, shred -u on Linux
+   gh secret list --app dependabot   # shows MODEL_BOT_PRIVATE_KEY
+   ```
+
+The App ID is written in the workflow because the other workflows read `vars.MODEL_BOT_APP_ID`
+from the `model-eval` environment, which a Dependabot run cannot use. Confirm it with
+`gh api /apps/cpcc-model-bot --jq .id`.
+
+**Check that it works.** On a patch or minor Dependabot PR, the `dependabot` run passes "Mint
+cpcc-model-bot token", the timeline shows `auto_merge_enabled` and then `added_to_merge_queue` by
+`cpcc-model-bot[bot]`, and the merge group runs the required checks (`merge_group` runs on
+`gh-readonly-queue/master/pr-<n>-...`):
+
+```bash
+gh api "repos/:owner/:repo/issues/<n>/timeline?per_page=100" \
+  --jq '.[]|select(.event|test("auto_merge|queue|merged"))|"\(.created_at) \(.event) \(.actor.login)"'
+```
+
+A PR opened before this change keeps its old `github-actions[bot]` arming and gets no new run on
+its own. To move it over: `gh pr merge <n> --disable-auto`, then comment `@dependabot rebase` on
+it (or close and reopen it). A new `dependabot` run appears and arms it as the App.
+
+Keep "Require branches to be up to date" off (`strict: false`); the queue already tests each PR
+against current `master`. The API example above sets `strict=true` and one required approval;
+either one stops bot PRs from merging on their own.
+
+**If the mint step fails** (secret missing, key revoked or rotated, App uninstalled), every patch
+or minor Dependabot PR shows a red `dependabot` job and is not armed; nothing merges by itself.
+`dependabot` is not a required check, so nothing else is blocked. Owner: the repo owner. Fix:
+generate a new key and store it as in setup steps 2-3, then re-run the failed job
+(`gh run rerun <run id> --failed`). Check: "Mint cpcc-model-bot token" is green.
+
+**If the key leaks.** Revoke the Dependabot key (the fingerprint from setup step 2) under the App's
+**Private keys**, then store a new one as in setup. Revoking it leaves the `model-eval` key working.
+If you cannot tell which key leaked, revoke both, generate two new keys, and store one in the
+Dependabot secret and one in the `model-eval` environment secret `MODEL_BOT_PRIVATE_KEY`. Then
+review what the App did: the organization audit log filtered to `cpcc-model-bot`, and recent
+merges on `master` (`gh pr list --state merged --limit 30`), for any merge or push that did not
+come from a Dependabot PR or a model promotion.
+
+**Undo.**
+1. Revert the workflow change.
+2. `gh secret delete MODEL_BOT_PRIVATE_KEY --app dependabot`.
+3. Under the App's **Private keys**, delete the key with the fingerprint from setup step 2. Check
+   that a second key remains for the `model-eval` environment before you delete it.
+4. Check: `gh secret list --app dependabot` no longer lists it, and the App shows only the
+   `model-eval` key.
+
+Patch and minor PRs then wait for someone to add them to the queue by hand, as before.
+
 ## Running Tests Locally
 
 ### Interactive Mode
