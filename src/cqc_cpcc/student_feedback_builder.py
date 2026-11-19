@@ -27,22 +27,22 @@ from cqc_cpcc.rubric_models import RubricAssessmentResult
 
 # Closing lines, matched to how the student did (Christopher, 2026-10-07): concise for
 # high scores, warm for the middle, mentoring for low scores. They never mention a next
-# assignment or a resubmission, which students usually cannot make.
+# assignment or a resubmission, which students usually cannot make. The grade is final
+# (Christopher, 2026-11-19): no line invites the student to office hours, to contact the
+# instructor, to send a corrected file, or to fix or polish the submission.
 CLOSING_NO_WORK = (
-    "No gradable source file was received for this assignment. If the wrong file was "
-    "uploaded by mistake, email me right away with the correct file and proof that it was "
-    "completed before the deadline; a late correction may not be accepted."
+    "No gradable source file was received for this assignment, so it was graded as not "
+    "submitted."
 )
 CLOSING_BANDS = (
     (90, "Excellent work. Your program meets the requirements cleanly."),
-    (80, "Strong work. The notes above point to the remaining details to polish."),
-    (70, "You are on the right track, and much of this works well. Take time with the notes "
-         "above; working through them will strengthen your understanding of this material."),
-    (60, "There is real progress here to build on. Work through the items above one at a "
-         "time, and please reach out if any of them are unclear."),
-    (0, "This submission does not yet meet several core requirements. I recommend reviewing "
-        "the related course material and practicing each concept noted above. Please come to "
-        "office hours or contact me so we can work through it together."),
+    (80, "Strong work. The notes above explain the remaining details that cost points."),
+    (70, "You are on the right track, and much of this works well. The notes above explain what "
+         "was missed and why; reviewing them will strengthen your understanding of this material."),
+    (60, "There is real progress here to build on. Review each item above alongside the related "
+         "course material until the concept is clear."),
+    (0, "This submission does not meet several core requirements. Review the related course "
+        "material and practice each concept noted above to build your understanding."),
 )
 
 

@@ -9,6 +9,7 @@ since the schema is enforced via OpenAI's native JSON Schema validation.
 
 from typing import Optional
 
+from cqc_cpcc.prompts.final_grade import FINAL_GRADE_RULE
 from cqc_cpcc.prompts.markers import neutralize_markers
 from cqc_cpcc.prompts.solution_rules import solution_rules_text
 from cqc_cpcc.utilities.AI import untrusted_fence
@@ -116,6 +117,7 @@ SCOPE DISCIPLINE
 - If runtime behavior is required but cannot be verified statically, infer from code paths and state assumptions in justification fields.
 - If alternative implementation satisfies requirement, mark as Meets.
 - Output JSON only. All reasoning is private.
+- {final_grade_rule}
 
 AMBIGUITY HANDLING
 - If line numbers are unclear, set to "not_applicable" and explain in justification.
@@ -128,6 +130,7 @@ AMBIGUITY HANDLING
         submission_data_line=SUBMISSION_DATA_LINE,
         solution_rules=solution_rules_text(),
         extra_system_instructions=extra_system_instructions,
+        final_grade_rule=FINAL_GRADE_RULE,
     ).strip()
 
     user_template = """

@@ -17,7 +17,10 @@ instructor, tuned to flag little ordinary teaching language, and a hit is never 
                   ``R1`` / ``T3`` outside backticks
 ``hidden_input``  a hidden test input (stdin) the caller passes in
 ``identifier``    a camelCase or snake_case name outside backticks. Severity ``review`` (the rest are
-                  ``block``): it may well be the student's own code.
+                  ``block``, except ``invitation``): it may well be the student's own code.
+``invitation``    wording that offers what a final grade does not (Christopher, 2026-11-19): office
+                  hours, "come see me", "contact me", a resubmission, or "revise/fix your code".
+                  Severity ``review``: "fix" is ordinary teaching language, so it warns, never blocks.
 
 Text inside backtick code spans is otherwise ignored. A phrase, hidden input or identifier that also
 appears in the assignment instructions (``instructions_text``), and an identifier found in the
@@ -43,6 +46,7 @@ KIND_ID_REWRITE = "id_rewrite"
 KIND_ID = "id"
 KIND_HIDDEN_INPUT = "hidden_input"
 KIND_IDENTIFIER = "identifier"
+KIND_INVITATION = "invitation"
 
 SEVERITY_BLOCK = "block"
 SEVERITY_REVIEW = "review"
@@ -83,6 +87,18 @@ _LEVEL_LABEL_RE = re.compile(
     r"^[ \t]*(?:[-*•][ \t]*)?(?:\*\*)?(?:[A-Za-z][^:\n]{0,40}:[ \t]*)?"
     r"((?:" + "|".join(LEVEL_LABELS) + r")[ \t]*:)",
     re.IGNORECASE | re.MULTILINE,
+)
+
+# Offers a final grade does not make. Every alternative starts on a word boundary with a literal
+# and has bounded repeats only, like the patterns above.
+_INVITATION_RE = re.compile(
+    r"\boffice[ \t]+hours?\b|\bmy[ \t]+office\b"
+    r"|\b(?:come|stop)[ \t]+(?:by[ \t]+(?:and[ \t]+)?)?(?:to[ \t]+)?see[ \t]+me\b"
+    r"|\b(?:contact|email|e-mail|message)[ \t]+me\b|\breach[ \t]+out\b"
+    r"|\bre-?submi(?:t|ts|tted|tting|ssions?)\b"
+    r"|\b(?:revise|fix|correct|update|redo|rewrite)[ \t]+(?:your|the|this)[ \t]+"
+    r"(?:code|program|submission|work|assignment|project|lab)\b",
+    re.IGNORECASE,
 )
 
 # ``the “Typical order” test``: a leading "the", a curly-quoted label, then the absorbed noun.
@@ -213,6 +229,9 @@ def lint_student_feedback(
         for m in pattern.finditer(masked):
             if m.group(0) not in known and not in_instructions(m.group(0)):
                 add(KIND_IDENTIFIER, m, SEVERITY_REVIEW)
+    for m in _INVITATION_RE.finditer(masked):
+        if not in_instructions(m.group(0)):
+            add(KIND_INVITATION, m, SEVERITY_REVIEW)
     return sorted(found, key=lambda f: (f.start, f.end))
 
 
@@ -227,7 +246,8 @@ def summarize_findings(findings: Iterable[Finding], limit: int = 8) -> str:
     The tokens come from model output, so a caller that renders Markdown must escape the result."""
     findings = list(findings)
     blocked = [f for f in findings if f.severity == SEVERITY_BLOCK]
-    review = [f for f in findings if f.severity == SEVERITY_REVIEW]
+    review = [f for f in findings if f.severity == SEVERITY_REVIEW and f.kind != KIND_INVITATION]
+    invitations = [f for f in findings if f.kind == KIND_INVITATION]
     out = []
     if blocked:
         reasons = dict(_KIND_REASONS)
@@ -237,4 +257,9 @@ def summarize_findings(findings: Iterable[Finding], limit: int = 8) -> str:
     if review:
         names = list(dict.fromkeys(f"“{f.token.strip()}”" for f in review))
         out.append("Check that these code names come from the student's own work: " + _quoted(names, limit) + ".")
+    if invitations:
+        phrases = list(dict.fromkeys(f"“{f.token.strip()}”" for f in invitations))
+        out.append("The grade is final, but these words suggest the student can revise or resubmit the work, "
+                   "or should come to office hours: " + _quoted(phrases, limit) + ". Reword them before you "
+                   "hand this back.")
     return " ".join(out)

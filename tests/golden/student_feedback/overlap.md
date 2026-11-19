@@ -17,4 +17,4 @@ You are close; one problem is reported by two checks.
   - **Missing Decimal Places**: The gross pay is printed as a whole number.
     The total is printed as an integer.
 
-You are on the right track, and much of this works well. Take time with the notes above; working through them will strengthen your understanding of this material.
+You are on the right track, and much of this works well. The notes above explain what was missed and why; reviewing them will strengthen your understanding of this material.

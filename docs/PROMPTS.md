@@ -110,6 +110,24 @@ expected behaviour but never shows solution code. The rules live in
   version is reverted by hand, run `poetry run python -m cqc_cpcc.model_eval prompts
   fingerprint --write`.
 
+## The grade is final (rubric-grading v5, exam-grading v4, flowgorithm-grade v4)
+
+Ruling, Christopher 2026-11-19: a graded submission is never revised or resubmitted, and
+students are not asked to come to office hours. The three grading prompts carry one shared
+rule, `FINAL_GRADE_RULE` in `cqc_cpcc/prompts/final_grade.py`: write feedback as an
+explanation of what the submission does and what was required; never tell the student to
+revise, fix, update, redo or resubmit the work, or invite them to office hours, a meeting or
+to contact the instructor. The rubric prompt no longer asks for "actionable" feedback. The
+Give Feedback page (`project-feedback`) is not changed: its feedback comes before grading, so
+"how to fix" is the point there.
+
+The same ruling rewrote the score-matched closing lines in `student_feedback_builder.py`
+(the no-work line no longer asks for a corrected file), and `student_feedback_lint` flags
+office hours, "come see me", "contact me" / "reach out", resubmission and "revise/fix your
+code" as a `review` finding (a warning on the Feedback tab, never a block).
+
+- **A version bump re-grades**, as above. **Rollback:** `git revert` the PR.
+
 ## System and user messages (rubric-grading v3, exam-grading v3, PR 19b)
 
 Both grading prompts are sent as two messages, through `llm_gateway.structured(..., system=)`:

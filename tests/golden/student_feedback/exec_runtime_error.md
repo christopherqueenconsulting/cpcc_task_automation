@@ -13,4 +13,4 @@ Your program crashes before it prints the pay.
   - **Program Crashes**: The program ends with a runtime_error on the second input.
     Output check: with the input `52 18.25`, the expected line was `Gross pay: 1096.88` but your program printed `(no output)`.
 
-This submission does not yet meet several core requirements. I recommend reviewing the related course material and practicing each concept noted above. Please come to office hours or contact me so we can work through it together.
+This submission does not meet several core requirements. Review the related course material and practice each concept noted above to build your understanding.
