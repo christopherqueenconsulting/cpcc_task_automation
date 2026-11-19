@@ -606,9 +606,10 @@ def test_a_driver_problem_with_the_students_job_is_skipped_not_runner_unavailabl
 # The prompt: byte-identical without a verified result, fenced evidence with one
 # --------------------------------------------------------------------------- #
 # sha256 of the two fingerprint renders (system + user message, fixed nonce) since PR 19b. They pin the
-# prompt without evidence: a change to the text is deliberate and updates these.
-GOLDEN_RENDERS = ["968e51dc2ee755b773274cbe77d67830c3817dcfafa85dfcd90d70a8f4be00a0",
-                  "a39ea21a4aaa01cc3b8da37bbfb7c80bf9a7222991ca77f754959e49d3140d94"]
+# prompt without evidence: a change to the text is deliberate and updates these (the final-grade
+# rule, rubric-grading v5, changed the system message).
+GOLDEN_RENDERS = ["f78bb447641d6014fb38ccf1d72ec87c129d38cb366c521534b89452cd57e087",
+                  "9078661eb6024672d6cf66bacb30ad10f1a6f6135d54ee1f07c4991b3e579d0e"]
 NONCE = "0123456789abcdef"
 
 

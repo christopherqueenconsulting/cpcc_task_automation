@@ -195,6 +195,42 @@ def test_empty_text_and_grouped_summary():
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("text, token", [
+    ("Please come to office hours so we can go over it.", "office hours"),
+    ("Stop by my office this week.", "my office"),
+    ("Come see me about the loop.", "Come see me"),
+    ("Please reach out if anything is unclear.", "reach out"),
+    ("Email me with any questions.", "Email me"),
+    ("You may resubmit by Friday.", "resubmit"),
+    ("A re-submission is allowed.", "re-submission"),
+    ("Revise your code so the total prints.", "Revise your code"),
+    ("Fix the program before the deadline.", "Fix the program"),
+    ("Update this submission with the new prompt.", "Update this submission"),
+])
+def test_an_invitation_a_final_grade_does_not_offer_is_a_review_finding(text, token):
+    found = [f for f in lint_student_feedback(text) if f.kind == "invitation"]
+    assert [(f.token, f.severity) for f in found] == [(token, "review")]
+
+
+@pytest.mark.unit
+def test_ordinary_teaching_wording_is_not_an_invitation():
+    text = ("The loop stops one short; the fix is to compare with <= instead of <. Correcting the bound "
+            "would print all ten values. The program updates the total correctly.")
+    assert [f for f in lint_student_feedback(text) if f.kind == "invitation"] == []
+
+
+@pytest.mark.unit
+def test_an_invitation_in_the_instructions_is_skipped_and_the_summary_names_the_rest():
+    text = "Revise your code from Lab 3 was the task. Please come to office hours."
+    found = lint_student_feedback(text, instructions_text="Lab 4: revise your code from Lab 3.")
+    assert [(f.kind, f.token) for f in found] == [("invitation", "office hours")]
+    summary = summarize_findings(found)
+    assert summary == ("The grade is final, but these words suggest the student can revise or resubmit the "
+                       "work, or should come to office hours: “office hours”. Reword them before you hand this back.")
+    assert "code names" not in summary
+
+
+@pytest.mark.unit
 def test_hidden_line_scan_is_capped():
     hidden = "\n".join(f"filler line {i}" for i in range(50)) + "\nsecret late line"
     assert lint_student_feedback("It had secret late line in it.", hidden_inputs=(hidden,)) == []

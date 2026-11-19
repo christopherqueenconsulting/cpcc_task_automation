@@ -13,4 +13,4 @@ Your program does not compile, so none of it could be tested.
   - **Does Not Compile**: The program does not compile.
     Verified by g++: the submission does not compile.
 
-This submission does not yet meet several core requirements. I recommend reviewing the related course material and practicing each concept noted above. Please come to office hours or contact me so we can work through it together.
+This submission does not meet several core requirements. Review the related course material and practice each concept noted above to build your understanding.

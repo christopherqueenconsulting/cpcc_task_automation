@@ -9,7 +9,12 @@ grading steps are unchanged from version 1.
 Version 3 (October 2026): the "Submission File Name" line is replaced by two facts the app
 checked locally (lab number in the file name, name-like word in the file name), with one rule
 that file-name criteria are decided only by them. The file name itself is never sent.
+
+Version 4 (November 2026): overall_feedback follows ``FINAL_GRADE_RULE``: the grade is final, so
+the feedback never asks for a revision or a resubmission, or invites the student to office hours.
 """
+
+from cqc_cpcc.prompts.final_grade import FINAL_GRADE_RULE
 
 FLOWGORITHM_GRADE_PROMPT = """
 You are a community college professor grading and giving feedback on a submission for a required assignment.
@@ -47,5 +52,6 @@ Output Instructions (structured JSON):
   never below 0.
 - overall_feedback: 2-4 sentences of constructive feedback for the student. Do not give them a
   full solution.
+- """ + FINAL_GRADE_RULE + """
 Text fields may use markdown.
 """

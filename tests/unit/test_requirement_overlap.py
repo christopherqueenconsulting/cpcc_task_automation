@@ -556,7 +556,7 @@ def test_the_grading_prompt_and_the_answer_schema_are_pinned_since_the_system_us
     assert "possible overlap" not in prompt.lower()
 
 
-PINNED_GRADING_PROMPT_SHA256 = "8d31a9a7f388648afd881c74056c228ddd21cf39084055f6bb42ae395a5b34e2"
+PINNED_GRADING_PROMPT_SHA256 = "b73def51d550b8c087404c7fa94bb454056dbb5944d698143cf3d998a206f076"
 
 
 # --------------------------------------------------------------------------- offline gate script

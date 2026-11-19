@@ -13,4 +13,4 @@ Your program starts but never prints a result.
   - **No Output**: The program prints nothing for the test inputs.
     Output check: your program's output differs from the expected output in format.
 
-This submission does not yet meet several core requirements. I recommend reviewing the related course material and practicing each concept noted above. Please come to office hours or contact me so we can work through it together.
+This submission does not meet several core requirements. Review the related course material and practice each concept noted above to build your understanding.

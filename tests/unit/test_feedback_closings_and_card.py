@@ -52,6 +52,19 @@ def test_closings_never_promise_a_next_assignment_or_resubmission():
 
 
 @pytest.mark.unit
+def test_closings_treat_the_grade_as_final():
+    # Christopher, 2026-11-19: no office hours, no contact invitation, no corrected file, no "fix" or "polish"
+    from cqc_cpcc.student_feedback_lint import KIND_INVITATION, lint_student_feedback
+
+    for text in [t for _, t in CLOSING_BANDS] + [CLOSING_NO_WORK]:
+        lowered = text.lower()
+        for banned in ("office", "contact", "reach out", "email", "come see", "correct file", "late correction",
+                       "polish", "fix", "revise"):
+            assert banned not in lowered, (banned, text)
+        assert [f for f in lint_student_feedback(text) if f.kind == KIND_INVITATION] == [], text
+
+
+@pytest.mark.unit
 def test_greeting_without_a_name_is_plain_hello():
     assert build_student_feedback(_result(20), student_name=None).startswith("Hello,")
 

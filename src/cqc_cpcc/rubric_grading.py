@@ -36,6 +36,7 @@ from cqc_cpcc.course_identifier import course_ids_match
 from cqc_cpcc.error_definitions_models import ErrorDefinition
 from cqc_cpcc.execution_check import ExecutionPlan
 from cqc_cpcc.feedback_ids import humanize_result_ids
+from cqc_cpcc.prompts.final_grade import FINAL_GRADE_RULE
 from cqc_cpcc.prompts.markers import neutralize_markers
 from cqc_cpcc.prompts.solution_rules import SOLUTION_RULES
 from cqc_cpcc.reconciliation import (SOURCE_COMPILER, SOURCE_MODEL, SOURCE_REQUIREMENT, note, note_added,
@@ -234,7 +235,8 @@ def build_rubric_grading_system(rubric: Rubric, *, has_error_definitions: bool =
                  "Use the detected errors to choose the performance level and describe them in feedback.")
     else:
         p.append("- error_count: leave points_earned null (the backend computes it from the error counts).")
-    p.append("For every criterion, give specific, actionable feedback with evidence from the submission.")
+    p.append("For every criterion, give specific feedback with evidence from the submission.")
+    p.append(FINAL_GRADE_RULE)
     p.append("")
 
     p.append("### Output Requirements")

@@ -13,4 +13,4 @@ You are close. One requirement is only partly done.
   - **Incomplete Requirement**: Pays time and a half for hours over 40 (incomplete)
     R3: overtime is computed for hours over 40 but the rate is not multiplied by 1.5.
 
-Strong work. The notes above point to the remaining details to polish.
+Strong work. The notes above explain the remaining details that were missed.

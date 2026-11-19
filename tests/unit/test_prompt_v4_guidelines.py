@@ -92,9 +92,10 @@ def test_the_fence_still_strips_a_forged_marker_in_v4():
     assert untrusted_fence.MARKER_PREFIX == "UNTRUSTED"
 
 
-def test_rubric_grading_is_v4_and_exam_grading_stays_v3():
-    assert prompt_tag("rubric-grading") == "rubric-grading@4"
-    assert prompt_tag("exam-grading") == "exam-grading@3"
+def test_rubric_grading_is_v5_and_exam_grading_is_v4():
+    # v5 and v4 (2026-11-19) only add the final-grade rule (prompts/final_grade.py)
+    assert prompt_tag("rubric-grading") == "rubric-grading@5"
+    assert prompt_tag("exam-grading") == "exam-grading@4"
 
 
 # --- review round 1 ---------------------------------------------------------------------------
