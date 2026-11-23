@@ -67,7 +67,7 @@ jobs:
       # second copy. Here: the export must still work, and requirements.txt must stay untracked.
       - name: Set up uv for dependency export
         if: matrix.shard == 1
-        uses: astral-sh/setup-uv@v10.3.3
+        uses: astral-sh/setup-uv@v10.4.0
       - name: Verify Streamlit requirements export
         if: matrix.shard == 1
         shell: bash
